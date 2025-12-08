@@ -11,7 +11,7 @@ The Meshtastic ATAK Plugin enables seamless integration between the Android Team
 ### Core Functionality
 - **Position Location Information (PLI)** - Share real-time location data between ATAK devices via Meshtastic
 - **Chat Integration** - Send and receive GeoChat messages through the mesh network
-- **File Transfer** - Transfer mission packages and files using chunked data transmission
+- **File Transfer** - Transfer mission packages and files using fountain code encoding (requires Short_Turbo modem preset)
 - **Voice Memos** - Record speech-to-text messages and broadcast via Meshtastic
 - **External GPS Support** - Use Meshtastic device's GPS as external GPS source for ATAK
 - **Server Relay** - Forward CoT events between Meshtastic mesh and TAK servers
@@ -21,7 +21,7 @@ The plugin has been refactored for better maintainability and performance:
 - Modular architecture with separated concerns
 - Centralized service management
 - Improved error handling and logging
-- Optimized chunking for large data transfers
+- Fountain code encoding for reliable large data transfers over lossy networks
 - Thread-safe singleton patterns for shared resources
 
 ## Installation
@@ -41,7 +41,7 @@ Access plugin settings via: **Settings → Tool Preferences → Specific Tool Pr
 #### Connection Settings
 - **Meshtastic Channel Index** - Select which Meshtastic channel to use (0-7, default: 0)
 - **Meshtastic Hop Limit** - Set maximum hop count for messages (1-8, default: 3)
-- **Allow SWITCH Command** - Enable remote switching to Short/Fast mode for file transfers
+- **Request ACK** - Request acknowledgment for outgoing messages
 
 #### Display Settings
 - **Show All Meshtastic Devices** - Display all Meshtastic nodes as sensor markers on map
@@ -95,13 +95,13 @@ The Voice Memo tool allows hands-free message transmission:
 #### Core Services
 - **MeshServiceManager** - Handles connection and communication with Meshtastic Android app
 - **CotEventProcessor** - Processes and converts between CoT and Meshtastic formats
-- **ChunkManager** - Manages chunked data transmission for large files
+- **FountainChunkManager** - Manages fountain code encoding for large data transfers
 - **NotificationHelper** - Handles user notifications for file transfers
 
 #### Data Flow
 1. CoT events from ATAK are intercepted by the plugin
 2. Events are processed and converted to Meshtastic protobuf format
-3. Data is chunked if necessary (>236 bytes)
+3. Large messages (>231 bytes) are encoded using fountain codes (LT codes)
 4. Packets are sent via IMeshService to connected Meshtastic device
 5. Incoming Meshtastic packets are converted back to CoT format
 6. CoT events are injected into ATAK's event dispatcher
@@ -113,10 +113,10 @@ The Voice Memo tool allows hands-free message transmission:
 - Generic CoT events (with EXI compression)
 
 ### Performance Optimizations
-- Chunked transmission for large payloads
+- Fountain code encoding for reliable large payload transfer over lossy networks
 - EXI compression for generic CoT events
 - Optimized protobuf for PLI and chat messages
-- Configurable hop limits and retry mechanisms
+- Configurable hop limits for network reach control
 
 ## Building from Source
 

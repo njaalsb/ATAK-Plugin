@@ -1,0 +1,542 @@
+package com.atakmap.android.meshtastic.util.fountain;
+
+import com.atakmap.android.meshtastic.service.MeshServiceManager;
+import com.atakmap.coremap.log.Log;
+import org.meshtastic.core.model.DataPacket;
+import org.meshtastic.core.model.MessageStatus;
+import org.meshtastic.proto.Portnums;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Fountain code-based chunk manager for reliable large message transfer
+ * over lossy mesh networks.
+ *
+ * Features:
+ * - Fountain codes allow any K of N blocks to reconstruct data
+ * - Minimal feedback (single ACK after transfer)
+ * - Automatic loss recovery without explicit retransmit requests
+ * - Support for multiple concurrent transfers
+ * - Timeout-based cleanup of stale transfers
+ */
+public class FountainChunkManager {
+    private static final String TAG = "FountainChunkManager";
+
+    // Configuration
+    private static final int BLOCK_SIZE = FountainPacket.MAX_PAYLOAD_SIZE;
+    private static final double DEFAULT_OVERHEAD = 0.15;  // 15% extra blocks
+    private static final int MAX_RETRIES = 3;
+    private static final long ACK_TIMEOUT_MS = 30000;  // 30 seconds
+    private static final long INTER_PACKET_DELAY_MS = 100;  // 100ms between packets
+    private static final long RECEIVE_TIMEOUT_MS = 60000;  // 60 second receive timeout
+    private static final long CLEANUP_INTERVAL_MS = 10000;  // 10 second cleanup interval
+    private static final int MAX_DATA_SIZE = 64 * 1024;  // 64KB max
+
+    private final FountainCodec codec;
+    private final MeshServiceManager meshServiceManager;
+    private final String localNodeId;
+
+    // Receiver state - tracks incoming transfers
+    private final ConcurrentHashMap<Integer, ReceiveState> receiveStates;
+
+    // Sender state - tracks outgoing transfers
+    private final ConcurrentHashMap<Integer, SendState> sendStates;
+
+    // Callback for completed transfers
+    private TransferCallback callback;
+
+    // Background cleanup
+    private final ScheduledExecutorService scheduler;
+
+    /**
+     * Callback interface for transfer events.
+     */
+    public interface TransferCallback {
+        /**
+         * Called when a transfer completes successfully.
+         * @param transferId The transfer ID
+         * @param data The received data (null for send completions)
+         * @param senderNodeId The sender's node ID (null for send completions)
+         * @param transferType The type of transfer (Constants.TRANSFER_TYPE_COT or TRANSFER_TYPE_FILE)
+         */
+        void onTransferComplete(int transferId, byte[] data, String senderNodeId, byte transferType);
+        void onTransferFailed(int transferId, String reason);
+        void onProgress(int transferId, int received, int total, boolean isSending);
+    }
+
+    public FountainChunkManager(MeshServiceManager meshServiceManager, String localNodeId) {
+        this.meshServiceManager = meshServiceManager;
+        this.localNodeId = localNodeId;
+        this.codec = new FountainCodec(BLOCK_SIZE);
+        this.receiveStates = new ConcurrentHashMap<>();
+        this.sendStates = new ConcurrentHashMap<>();
+        this.scheduler = Executors.newSingleThreadScheduledExecutor();
+
+        // Start cleanup task
+        scheduler.scheduleAtFixedRate(
+            this::cleanupStaleTransfers,
+            CLEANUP_INTERVAL_MS,
+            CLEANUP_INTERVAL_MS,
+            TimeUnit.MILLISECONDS
+        );
+    }
+
+    public void setCallback(TransferCallback callback) {
+        this.callback = callback;
+    }
+
+    /**
+     * Send data using fountain codes.
+     *
+     * @param data Data to send
+     * @param channel Meshtastic channel index
+     * @param hopLimit Hop limit for packets
+     * @param transferType Type of transfer (Constants.TRANSFER_TYPE_COT or TRANSFER_TYPE_FILE)
+     * @return Transfer ID, or -1 on failure
+     */
+    public int send(byte[] data, int channel, int hopLimit, byte transferType) {
+        if (data == null || data.length == 0) {
+            Log.e(TAG, "Cannot send null or empty data");
+            return -1;
+        }
+
+        if (data.length > MAX_DATA_SIZE) {
+            Log.e(TAG, "Data too large: " + data.length + " > " + MAX_DATA_SIZE);
+            return -1;
+        }
+
+        if (!meshServiceManager.isConnected()) {
+            Log.e(TAG, "Mesh service not connected");
+            return -1;
+        }
+
+        // Prepend transfer type byte to data
+        byte[] dataWithType = new byte[data.length + 1];
+        dataWithType[0] = transferType;
+        System.arraycopy(data, 0, dataWithType, 1, data.length);
+
+        int transferId = FountainPacket.generateTransferId(localNodeId);
+        byte[] dataHash = FountainPacket.computeHash(dataWithType);
+
+        int K = codec.getSourceBlockCount(dataWithType.length);
+        int blocksToSend = codec.getRecommendedBlockCount(dataWithType.length, DEFAULT_OVERHEAD);
+
+        Log.d(TAG, "Starting fountain transfer " + transferId +
+                  ": " + data.length + " bytes (type=" + transferType + "), K=" + K +
+                  ", sending " + blocksToSend + " blocks");
+
+        // Log data details for debugging
+        Log.d(TAG, "Transfer " + transferId + " dataWithType hash: " + bytesToHex(dataHash));
+        if (dataWithType.length >= 17) {
+            Log.d(TAG, "Transfer " + transferId + " dataWithType first 17 bytes (type+data): " + String.format(
+                "%02X | %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+                dataWithType[0],  // type byte
+                dataWithType[1], dataWithType[2], dataWithType[3], dataWithType[4],
+                dataWithType[5], dataWithType[6], dataWithType[7], dataWithType[8],
+                dataWithType[9], dataWithType[10], dataWithType[11], dataWithType[12],
+                dataWithType[13], dataWithType[14], dataWithType[15], dataWithType[16]));
+        }
+
+        // Also log original data hash (without type byte) for comparison with receiver callback
+        byte[] originalDataHash = FountainPacket.computeHash(data);
+        Log.d(TAG, "Transfer " + transferId + " original data hash (no type): " + bytesToHex(originalDataHash));
+
+        SendState state = new SendState(transferId, dataWithType, dataHash, K, channel, hopLimit);
+        sendStates.put(transferId, state);
+
+        // Send in background thread
+        new Thread(() -> sendTransfer(state, blocksToSend)).start();
+
+        return transferId;
+    }
+
+    private void sendTransfer(SendState state, int blocksToSend) {
+        int attempt = 0;
+
+        while (attempt < MAX_RETRIES && !state.isComplete) {
+            attempt++;
+            Log.d(TAG, "Transfer " + state.transferId + " attempt " + attempt);
+
+            // Generate and send blocks
+            List<FountainCodec.EncodedBlock> blocks = codec.encode(
+                state.data, blocksToSend, state.transferId
+            );
+
+            for (int i = 0; i < blocks.size() && !state.isComplete; i++) {
+                FountainCodec.EncodedBlock block = blocks.get(i);
+
+                FountainPacket.DataBlock dataBlock = new FountainPacket.DataBlock(
+                    state.transferId,
+                    block.seed,
+                    block.sourceBlockCount,
+                    block.totalLength,
+                    block.payload
+                );
+
+                sendPacket(dataBlock.toBytes(), state.channel, state.hopLimit);
+                state.blocksSent++;
+
+                if (callback != null) {
+                    callback.onProgress(state.transferId, i + 1, blocksToSend, true);
+                }
+
+                // Inter-packet delay to respect duty cycle
+                try {
+                    Thread.sleep(INTER_PACKET_DELAY_MS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+
+            // Wait for ACK
+            long waitStart = System.currentTimeMillis();
+            while (!state.isComplete &&
+                   System.currentTimeMillis() - waitStart < ACK_TIMEOUT_MS) {
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+
+                // Check if we received an ACK
+                if (state.ackReceived) {
+                    if (state.isComplete) {
+                        Log.d(TAG, "Transfer " + state.transferId + " completed successfully");
+                        sendStates.remove(state.transferId);
+                        if (callback != null) {
+                            callback.onTransferComplete(state.transferId, null, null, (byte) 0);
+                        }
+                        return;
+                    } else if (state.needMoreBlocks > 0) {
+                        // Receiver needs more blocks
+                        Log.d(TAG, "Transfer " + state.transferId +
+                                  " needs " + state.needMoreBlocks + " more blocks");
+                        blocksToSend = state.needMoreBlocks;
+                        state.ackReceived = false;
+                        break;  // Send more blocks
+                    }
+                }
+            }
+
+            if (!state.ackReceived) {
+                Log.w(TAG, "Transfer " + state.transferId + " ACK timeout, attempt " + attempt);
+                // Send fewer additional blocks on retry
+                blocksToSend = Math.max(5, state.K / 5);
+            }
+        }
+
+        if (!state.isComplete) {
+            Log.e(TAG, "Transfer " + state.transferId + " failed after " + MAX_RETRIES + " attempts");
+            sendStates.remove(state.transferId);
+            if (callback != null) {
+                callback.onTransferFailed(state.transferId, "Max retries exceeded");
+            }
+        }
+    }
+
+    /**
+     * Handle incoming packet. Call this for all received fountain packets.
+     *
+     * @param packetData Raw packet data
+     * @param senderNodeId Node ID of sender
+     * @param channel Channel packet was received on
+     * @param hopLimit Hop limit for responses
+     */
+    public void handlePacket(byte[] packetData, String senderNodeId, int channel, int hopLimit) {
+        if (!FountainPacket.isFountainPacket(packetData)) {
+            return;
+        }
+
+        byte packetType = FountainPacket.getPacketType(packetData);
+
+        if (packetType == FountainPacket.TYPE_DATA) {
+            handleDataBlock(packetData, senderNodeId, channel, hopLimit);
+        } else if (packetType == FountainPacket.TYPE_COMPLETE ||
+                   packetType == FountainPacket.TYPE_NEED_MORE) {
+            handleAck(packetData);
+        }
+    }
+
+    private void handleDataBlock(byte[] packetData, String senderNodeId,
+                                  int channel, int hopLimit) {
+        FountainPacket.DataBlock dataBlock = FountainPacket.DataBlock.fromBytes(packetData);
+        if (dataBlock == null) {
+            Log.w(TAG, "Failed to parse data block");
+            return;
+        }
+
+        int transferId = dataBlock.transferId;
+
+        // Get or create receive state
+        ReceiveState state = receiveStates.computeIfAbsent(transferId, id -> {
+            Log.d(TAG, "Starting receive for transfer " + id +
+                      ", K=" + dataBlock.sourceBlockCount +
+                      ", totalLen=" + dataBlock.totalLength);
+            return new ReceiveState(id, dataBlock.sourceBlockCount,
+                                   dataBlock.totalLength, senderNodeId, channel, hopLimit);
+        });
+
+        // Regenerate source indices from seed (use codec to ensure same algorithm)
+        int[] sourceIndices = codec.regenerateIndices(dataBlock.seed, dataBlock.sourceBlockCount);
+
+        // Log block details for debugging
+        StringBuilder indicesStr = new StringBuilder();
+        for (int i = 0; i < sourceIndices.length; i++) {
+            if (i > 0) indicesStr.append(",");
+            indicesStr.append(sourceIndices[i]);
+        }
+        Log.d(TAG, "Transfer " + transferId + " block seed=" + dataBlock.seed +
+                  ", degree=" + sourceIndices.length + ", indices=[" + indicesStr + "]" +
+                  ", payload[0-3]=" + String.format("%02X %02X %02X %02X",
+                      dataBlock.payload[0], dataBlock.payload[1],
+                      dataBlock.payload[2], dataBlock.payload[3]));
+
+        // Add block
+        FountainCodec.EncodedBlock block = new FountainCodec.EncodedBlock(
+            dataBlock.seed,
+            dataBlock.sourceBlockCount,
+            dataBlock.totalLength,
+            sourceIndices,
+            dataBlock.payload
+        );
+
+        // Check for duplicate
+        if (state.hasBlock(dataBlock.seed)) {
+            return;  // Already have this block
+        }
+
+        state.addBlock(block);
+        state.lastActivityTime = System.currentTimeMillis();
+
+        if (callback != null) {
+            callback.onProgress(transferId, state.blocks.size(), state.K, false);
+        }
+
+        // Try to decode
+        if (codec.isLikelyDecodable(state.blocks)) {
+            byte[] decoded = codec.decode(state.blocks);
+
+            if (decoded != null && decoded.length > 0) {
+                // Log raw decoded data for debugging
+                Log.d(TAG, "Transfer " + transferId + " raw decoded: " + decoded.length + " bytes");
+                if (decoded.length >= 17) {
+                    Log.d(TAG, "Transfer " + transferId + " raw first 17 bytes (type+data): " + String.format(
+                        "%02X | %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+                        decoded[0],  // type byte
+                        decoded[1], decoded[2], decoded[3], decoded[4], decoded[5], decoded[6], decoded[7], decoded[8],
+                        decoded[9], decoded[10], decoded[11], decoded[12], decoded[13], decoded[14], decoded[15], decoded[16]));
+                }
+
+                // Extract transfer type from first byte
+                byte transferType = decoded[0];
+                byte[] actualData = new byte[decoded.length - 1];
+                System.arraycopy(decoded, 1, actualData, 0, actualData.length);
+
+                Log.d(TAG, "Transfer " + transferId + " decoded successfully, " +
+                          actualData.length + " bytes, type=" + transferType);
+
+                // Log hash of actual data (without type byte) for comparison
+                byte[] actualDataHash = FountainPacket.computeHash(actualData);
+                Log.d(TAG, "Transfer " + transferId + " actual data hash: " + bytesToHex(actualDataHash));
+
+                byte[] hash = FountainPacket.computeHash(decoded);
+                state.decodedData = decoded;
+                state.dataHash = hash;
+
+                Log.d(TAG, "Transfer " + transferId + " computed hash: " + bytesToHex(hash));
+
+                // Send COMPLETE ACK (twice for redundancy)
+                sendAck(transferId, FountainPacket.TYPE_COMPLETE,
+                       state.blocks.size(), 0, hash, channel, hopLimit);
+
+                try {
+                    Thread.sleep(200);  // Small delay before duplicate
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+
+                sendAck(transferId, FountainPacket.TYPE_COMPLETE,
+                       state.blocks.size(), 0, hash, channel, hopLimit);
+
+                // Notify callback with actual data (type byte stripped)
+                if (callback != null) {
+                    callback.onTransferComplete(transferId, actualData, state.senderNodeId, transferType);
+                }
+
+                // Keep state briefly for duplicate ACKs, then remove
+                scheduler.schedule(() -> receiveStates.remove(transferId),
+                                  5, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    private void handleAck(byte[] packetData) {
+        FountainPacket.AckPacket ack = FountainPacket.AckPacket.fromBytes(packetData);
+        if (ack == null) {
+            Log.w(TAG, "Failed to parse ACK packet");
+            return;
+        }
+
+        SendState state = sendStates.get(ack.transferId);
+        if (state == null) {
+            Log.d(TAG, "Received ACK for unknown transfer " + ack.transferId);
+            return;
+        }
+
+        state.ackReceived = true;
+
+        if (ack.isComplete()) {
+            // Verify hash matches
+            if (Arrays.equals(ack.dataHash, state.dataHash)) {
+                Log.d(TAG, "Transfer " + ack.transferId + " confirmed complete");
+                state.isComplete = true;
+            } else {
+                Log.w(TAG, "Transfer " + ack.transferId + " hash mismatch! " +
+                          "expected=" + bytesToHex(state.dataHash) +
+                          " received=" + bytesToHex(ack.dataHash));
+                state.needMoreBlocks = state.K / 4;  // Send more blocks
+            }
+        } else if (ack.isNeedMore()) {
+            Log.d(TAG, "Transfer " + ack.transferId + " needs more blocks: " + ack.neededBlocks);
+            state.needMoreBlocks = ack.neededBlocks;
+        }
+    }
+
+    private void sendPacket(byte[] data, int channel, int hopLimit) {
+        DataPacket dp = new DataPacket(
+            DataPacket.ID_BROADCAST,
+            data,
+            Portnums.PortNum.ATAK_FORWARDER_VALUE,
+            DataPacket.ID_LOCAL,
+            System.currentTimeMillis(),
+            0,
+            MessageStatus.UNKNOWN,
+            hopLimit,
+            channel,
+            false,  // wantAck - we handle our own ACKs
+            0, 0f, 0, null, null, 0, false
+        );
+        meshServiceManager.sendToMesh(dp);
+    }
+
+    private void sendAck(int transferId, byte type, int received, int needed,
+                         byte[] hash, int channel, int hopLimit) {
+        FountainPacket.AckPacket ack = new FountainPacket.AckPacket(
+            transferId, type, received, needed, hash
+        );
+        sendPacket(ack.toBytes(), channel, hopLimit);
+    }
+
+    private void cleanupStaleTransfers() {
+        long now = System.currentTimeMillis();
+
+        // Clean up stale receive states
+        Iterator<Map.Entry<Integer, ReceiveState>> recvIt = receiveStates.entrySet().iterator();
+        while (recvIt.hasNext()) {
+            Map.Entry<Integer, ReceiveState> entry = recvIt.next();
+            if (now - entry.getValue().lastActivityTime > RECEIVE_TIMEOUT_MS) {
+                Log.w(TAG, "Receive transfer " + entry.getKey() + " timed out");
+                recvIt.remove();
+                if (callback != null) {
+                    callback.onTransferFailed(entry.getKey(), "Receive timeout");
+                }
+            }
+        }
+    }
+
+    /**
+     * Shutdown the chunk manager.
+     */
+    public void shutdown() {
+        scheduler.shutdown();
+        try {
+            scheduler.awaitTermination(1, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    // ==================== State Classes ====================
+
+    private static class SendState {
+        final int transferId;
+        final byte[] data;
+        final byte[] dataHash;
+        final int K;
+        final int channel;
+        final int hopLimit;
+
+        int blocksSent = 0;
+        boolean ackReceived = false;
+        boolean isComplete = false;
+        int needMoreBlocks = 0;
+
+        SendState(int transferId, byte[] data, byte[] dataHash, int K,
+                 int channel, int hopLimit) {
+            this.transferId = transferId;
+            this.data = data;
+            this.dataHash = dataHash;
+            this.K = K;
+            this.channel = channel;
+            this.hopLimit = hopLimit;
+        }
+    }
+
+    private static class ReceiveState {
+        final int transferId;
+        final int K;
+        final int totalLength;
+        final String senderNodeId;
+        final int channel;
+        final int hopLimit;
+        final List<FountainCodec.EncodedBlock> blocks;
+        final java.util.Set<Integer> receivedSeeds;
+
+        long lastActivityTime;
+        byte[] decodedData;
+        byte[] dataHash;
+
+        ReceiveState(int transferId, int K, int totalLength, String senderNodeId,
+                    int channel, int hopLimit) {
+            this.transferId = transferId;
+            this.K = K;
+            this.totalLength = totalLength;
+            this.senderNodeId = senderNodeId;
+            this.channel = channel;
+            this.hopLimit = hopLimit;
+            this.blocks = new ArrayList<>();
+            this.receivedSeeds = new java.util.HashSet<>();
+            this.lastActivityTime = System.currentTimeMillis();
+        }
+
+        boolean hasBlock(int seed) {
+            return receivedSeeds.contains(seed);
+        }
+
+        void addBlock(FountainCodec.EncodedBlock block) {
+            blocks.add(block);
+            receivedSeeds.add(block.seed);
+        }
+    }
+
+    // Helper to convert bytes to hex string for logging
+    private static String bytesToHex(byte[] bytes) {
+        if (bytes == null) return "null";
+        StringBuilder sb = new StringBuilder();
+        for (byte b : bytes) {
+            sb.append(String.format("%02X", b));
+        }
+        return sb.toString();
+    }
+}

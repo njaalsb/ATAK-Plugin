@@ -38,6 +38,8 @@ import org.meshtastic.core.model.DataPacket;
 import org.meshtastic.proto.LocalOnlyProtos;
 import org.meshtastic.proto.MeshProtos;
 import org.meshtastic.core.model.MessageStatus;
+import org.meshtastic.core.model.DeviceMetrics;
+import org.meshtastic.core.model.MyNodeInfo;
 import org.meshtastic.core.model.NodeInfo;
 import org.meshtastic.proto.Portnums;
 import com.google.protobuf.ByteString;
@@ -83,10 +85,14 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements
     private final Context appContext;
     private final MapView mapView;
     private final View mainView;
-    private Button voiceMemoBtn, talk;
+    private Button voiceMemoBtn, talk, refreshMetricsBtn;
     private Model model;
     public SpeechService speechService;
     private TextView tv;
+    // Metrics display TextViews
+    private TextView metricsNodeName, metricsModel, metricsFirmware;
+    private TextView metricsBattery, metricsVoltage, metricsChUtil;
+    private TextView metricsAirTx, metricsUptime, metricsNodeCount;
     private int toggle = 0;
     private View.OnKeyListener keyListener;
     public static TextToSpeech t1;
@@ -122,6 +128,22 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements
         LayoutInflater inflater = (LayoutInflater) context.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
         this.mainView = inflater.inflate(R.layout.main_layout, null);
         tv = mainView.findViewById(R.id.tv);
+
+        // Initialize metrics TextViews
+        metricsNodeName = mainView.findViewById(R.id.metricsNodeName);
+        metricsModel = mainView.findViewById(R.id.metricsModel);
+        metricsFirmware = mainView.findViewById(R.id.metricsFirmware);
+        metricsBattery = mainView.findViewById(R.id.metricsBattery);
+        metricsVoltage = mainView.findViewById(R.id.metricsVoltage);
+        metricsChUtil = mainView.findViewById(R.id.metricsChUtil);
+        metricsAirTx = mainView.findViewById(R.id.metricsAirTx);
+        metricsUptime = mainView.findViewById(R.id.metricsUptime);
+        metricsNodeCount = mainView.findViewById(R.id.metricsNodeCount);
+
+        // Setup refresh button
+        refreshMetricsBtn = mainView.findViewById(R.id.refreshMetricsBtn);
+        refreshMetricsBtn.setOnClickListener(v -> updateMetricsDisplay());
+
         voiceMemoBtn = mainView.findViewById(R.id.voiceMemoBtn);
         voiceMemoBtn.setOnClickListener(v -> {
             if ((toggle++ % 2) == 0) {
@@ -668,6 +690,10 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements
 
     @Override
     public void onDropDownVisible(boolean v) {
+        if (v) {
+            // Refresh metrics when dropdown becomes visible
+            updateMetricsDisplay();
+        }
     }
 
     @Override
@@ -716,6 +742,123 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements
         Log.d(TAG, "Codec2 reinitialized with mode 700C, frame size: " + c2FrameSize + ", samples: " + samplesBufSize);
     }
     
+    /**
+     * Update the metrics display with current device information
+     */
+    private void updateMetricsDisplay() {
+        try {
+            MyNodeInfo myInfo = MeshtasticMapComponent.getMyNodeInfo();
+            List<NodeInfo> nodes = MeshtasticMapComponent.getNodes();
+
+            if (myInfo == null) {
+                metricsNodeName.setText("Not connected");
+                metricsModel.setText("--");
+                metricsFirmware.setText("--");
+                metricsBattery.setText("--");
+                metricsVoltage.setText("--");
+                metricsChUtil.setText("--");
+                metricsAirTx.setText("--");
+                metricsUptime.setText("--");
+                metricsNodeCount.setText("--");
+                return;
+            }
+
+            // Basic info from MyNodeInfo
+            metricsModel.setText(myInfo.getModel() != null ? myInfo.getModel() : "--");
+            metricsFirmware.setText(myInfo.getFirmwareVersion() != null ? myInfo.getFirmwareVersion() : "--");
+            metricsChUtil.setText(String.format(Locale.US, "%.1f%%", myInfo.getChannelUtilization()));
+            metricsAirTx.setText(String.format(Locale.US, "%.1f%%", myInfo.getAirUtilTx()));
+
+            // Node count
+            int nodeCount = nodes != null ? nodes.size() : 0;
+            metricsNodeCount.setText(String.valueOf(nodeCount));
+
+            // Find local node in nodes list for DeviceMetrics
+            NodeInfo localNode = null;
+            if (nodes != null) {
+                for (NodeInfo node : nodes) {
+                    if (node.getNum() == myInfo.getMyNodeNum()) {
+                        localNode = node;
+                        break;
+                    }
+                }
+            }
+
+            if (localNode != null) {
+                // Node name
+                if (localNode.getUser() != null) {
+                    metricsNodeName.setText(localNode.getUser().getLongName());
+                } else {
+                    metricsNodeName.setText("Node " + Integer.toHexString(localNode.getNum()));
+                }
+
+                // Device metrics
+                DeviceMetrics dm = localNode.getDeviceMetrics();
+                if (dm != null) {
+                    // Battery
+                    int battery = dm.getBatteryLevel();
+                    if (battery > 0 && battery <= 100) {
+                        metricsBattery.setText(battery + "%");
+                    } else if (battery == 101) {
+                        metricsBattery.setText("Plugged in");
+                    } else {
+                        metricsBattery.setText("--");
+                    }
+
+                    // Voltage
+                    float voltage = dm.getVoltage();
+                    if (voltage > 0) {
+                        metricsVoltage.setText(String.format(Locale.US, "%.2fV", voltage));
+                    } else {
+                        metricsVoltage.setText("--");
+                    }
+
+                    // Uptime
+                    int uptimeSecs = dm.getUptimeSeconds();
+                    if (uptimeSecs > 0) {
+                        metricsUptime.setText(formatUptime(uptimeSecs));
+                    } else {
+                        metricsUptime.setText("--");
+                    }
+                } else {
+                    metricsBattery.setText("--");
+                    metricsVoltage.setText("--");
+                    metricsUptime.setText("--");
+                }
+            } else {
+                metricsNodeName.setText("Node " + Integer.toHexString(myInfo.getMyNodeNum()));
+                metricsBattery.setText("--");
+                metricsVoltage.setText("--");
+                metricsUptime.setText("--");
+            }
+
+            Log.d(TAG, "Metrics display updated");
+        } catch (Exception e) {
+            Log.e(TAG, "Error updating metrics display", e);
+        }
+    }
+
+    /**
+     * Format uptime seconds into human readable string
+     */
+    private String formatUptime(int seconds) {
+        if (seconds < 60) {
+            return seconds + "s";
+        } else if (seconds < 3600) {
+            int mins = seconds / 60;
+            int secs = seconds % 60;
+            return mins + "m " + secs + "s";
+        } else if (seconds < 86400) {
+            int hours = seconds / 3600;
+            int mins = (seconds % 3600) / 60;
+            return hours + "h " + mins + "m";
+        } else {
+            int days = seconds / 86400;
+            int hours = (seconds % 86400) / 3600;
+            return days + "d " + hours + "h";
+        }
+    }
+
     @Override
     protected void disposeImpl() {
         mapView.removeOnKeyListener(keyListener);

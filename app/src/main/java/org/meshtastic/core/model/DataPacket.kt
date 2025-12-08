@@ -204,7 +204,7 @@ data class DataPacket(
 
     override fun describeContents(): Int = 0
 
-    // Update our object from our parcel (used for inout parameters
+    // Update our object from our parcel (used for inout parameters)
     fun readFromParcel(parcel: Parcel) {
         to = parcel.readString()
         parcel.createByteArray()

@@ -3,7 +3,6 @@ package com.atakmap.android.meshtastic;
 import static android.content.Context.NOTIFICATION_SERVICE;
 
 import static com.atakmap.android.maps.MapView.*;
-import static com.atakmap.android.meshtastic.util.Constants.PREF_PLUGIN_SHORTTURBO;
 
 import android.Manifest;
 import android.app.Activity;
@@ -20,8 +19,9 @@ import android.content.pm.PackageManager;
 
 import com.atakmap.android.maps.tilesets.EquirectangularTilesetSupport;
 import com.atakmap.android.meshtastic.util.Constants;
-import com.atakmap.android.meshtastic.util.AckManager;
 import com.atakmap.android.meshtastic.util.FileTransferManager;
+import com.atakmap.android.meshtastic.util.fountain.FountainChunkManager;
+import com.atakmap.android.meshtastic.util.fountain.FountainPacket;
 import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
@@ -52,10 +52,8 @@ import com.atakmap.coremap.maps.time.CoordinatedTime;
 
 import com.atakmap.map.projection.EquirectangularMapProjection;
 import org.meshtastic.proto.ATAKProtos;
-import org.meshtastic.proto.ConfigProtos;
 import org.meshtastic.core.model.DataPacket;
 
-import org.meshtastic.proto.LocalOnlyProtos;
 import org.meshtastic.core.model.MessageStatus;
 import org.meshtastic.core.model.NodeInfo;
 import org.meshtastic.proto.Portnums;
@@ -71,13 +69,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicReference;
 
 import com.siemens.ct.exi.core.EXIFactory;
 import com.siemens.ct.exi.core.helpers.DefaultEXIFactory;
@@ -114,21 +109,16 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
     private AudioTrack track = null;
     private int samplesBufSize = 0;
     private boolean audioPermissionGranted = false;
-    // chunking
-    private final HashMap<Integer, byte[]> chunkMap = new HashMap<>();
-    private boolean chunking = false;
-    private int chunkSize = 0;
-    private int chunkCount = 0;
-    private static final int MAX_CHUNK_MAP_SIZE = 1000; // Prevent unbounded growth
     // misc
     private long c2 = 0;
-    private int oldModemPreset;
-    private String sender;
-    // Meshtastic externl gps
+    // Meshtastic external gps
     private final MeshtasticExternalGPS meshtasticExternalGPS;
+    // Fountain code chunk manager for large transfers
+    private final FountainChunkManager fountainChunkManager;
 
-    public MeshtasticReceiver(MeshtasticExternalGPS meshtasticExternalGPS) {
+    public MeshtasticReceiver(MeshtasticExternalGPS meshtasticExternalGPS, FountainChunkManager fountainChunkManager) {
         this.meshtasticExternalGPS = meshtasticExternalGPS;
+        this.fountainChunkManager = fountainChunkManager;
         int permissionCheck = ContextCompat.checkSelfPermission(MapView.getMapView().getContext(), Manifest.permission.RECORD_AUDIO);
         if (permissionCheck != PackageManager.PERMISSION_GRANTED) {
             Log.d(TAG, "REC AUDIO DENIED");
@@ -175,6 +165,34 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
         }
         this.samplesBufSize = Codec2.getSamplesPerFrame(c2);
         Log.d(TAG, "Codec2 initialized with mode 700C, samples per frame: " + samplesBufSize);
+
+        // Set up fountain chunk manager callback to process received data
+        if (fountainChunkManager != null) {
+            fountainChunkManager.setCallback(new FountainChunkManager.TransferCallback() {
+                @Override
+                public void onTransferComplete(int transferId, byte[] data, String senderNodeId, byte transferType) {
+                    if (data == null) {
+                        // This is a send completion, not receive
+                        Log.d(TAG, "Fountain send transfer " + transferId + " completed");
+                        return;
+                    }
+                    Log.d(TAG, "Fountain receive transfer " + transferId + " completed, " +
+                              data.length + " bytes from " + senderNodeId + ", type=" + transferType);
+                    processFountainData(data, senderNodeId, transferType);
+                }
+
+                @Override
+                public void onTransferFailed(int transferId, String reason) {
+                    Log.e(TAG, "Fountain transfer " + transferId + " failed: " + reason);
+                }
+
+                @Override
+                public void onProgress(int transferId, int received, int total, boolean isSending) {
+                    Log.v(TAG, "Fountain transfer " + transferId + ": " + received + "/" + total +
+                              (isSending ? " (sending)" : " (receiving)"));
+                }
+            });
+        }
     }
 
     @Override
@@ -188,17 +206,14 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
                 boolean connected = extraConnected.equals(Constants.STATE_CONNECTED);
                 Log.d(TAG, "Received ACTION_MESH_CONNECTED: " + extraConnected);
                 if (connected) {
-                    SharedPreferences.Editor editor = prefs.edit();
-                    editor.putBoolean(PREF_PLUGIN_SHORTTURBO, false);
-                    editor.apply();
-                    boolean ret = MeshtasticMapComponent.reconnect();
-                    if (ret) {
-                        MeshtasticMapComponent.mConnectionState = MeshtasticMapComponent.ServiceConnectionState.CONNECTED;
-                        MeshtasticMapComponent.mw.setIcon("green");
-                    }
+                    // Radio connected - reconnect IPC service
+                    // The onServiceConnected callback will set widget to green
+                    MeshtasticMapComponent.reconnect();
                 } else {
-                    MeshtasticMapComponent.mConnectionState = MeshtasticMapComponent.ServiceConnectionState.DISCONNECTED;
-                    MeshtasticMapComponent.mw.setIcon("red");
+                    // Radio disconnected - set widget red
+                    if (MeshtasticMapComponent.mw != null) {
+                        MeshtasticMapComponent.mw.setIcon("red");
+                    }
                 }
                 break;
             }
@@ -208,11 +223,13 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
                     Log.d(TAG, "Received ACTION_MESH_DISCONNECTED: null");
                     return;
                 }
-                boolean connected = extraConnected.equals(Constants.STATE_DISCONNECTED);
+                boolean disconnected = extraConnected.equals(Constants.STATE_DISCONNECTED);
                 Log.d(TAG, "Received ACTION_MESH_DISCONNECTED: " + extraConnected);
-                if (connected) {
-                    MeshtasticMapComponent.mConnectionState = MeshtasticMapComponent.ServiceConnectionState.DISCONNECTED;
-                    MeshtasticMapComponent.mw.setIcon("red");
+                if (disconnected) {
+                    // Radio disconnected - set widget red
+                    if (MeshtasticMapComponent.mw != null) {
+                        MeshtasticMapComponent.mw.setIcon("red");
+                    }
                 }
                 break;
             }
@@ -220,27 +237,6 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
                 int id = intent.getIntExtra(Constants.EXTRA_PACKET_ID, 0);
                 MessageStatus status = intent.getParcelableExtra(Constants.EXTRA_STATUS);
                 Log.d(TAG, "Message Status ID: " + id + " Status: " + status);
-                
-                // Process ACK through AckManager
-                AckManager.getInstance().processAck(id, status);
-                
-                // Keep legacy preference updates for backward compatibility
-                if (prefs.getInt(Constants.PREF_PLUGIN_SWITCH_ID, 0) == id && status == MessageStatus.DELIVERED) {
-                    editor.putBoolean(Constants.PREF_PLUGIN_SWITCH_ACK, false);
-                    editor.apply();
-                    Log.d(TAG, "Got ACK from Switch");
-                } else if (prefs.getInt(Constants.PREF_PLUGIN_CHUNK_ID, 0) == id && status == MessageStatus.DELIVERED) {
-                    // clear the ACK/ERR for the chunk
-                    editor.putBoolean(Constants.PREF_PLUGIN_CHUNK_ACK, false);
-                    editor.putBoolean(Constants.PREF_PLUGIN_CHUNK_ERR, false);
-                    editor.apply();
-                    Log.d(TAG, "Got DELIVERED from Chunk");
-                } else if (prefs.getInt(Constants.PREF_PLUGIN_CHUNK_ID, 0) == id && status == MessageStatus.ERROR) {
-                    editor.putBoolean(Constants.PREF_PLUGIN_CHUNK_ACK, false);
-                    editor.putBoolean(Constants.PREF_PLUGIN_CHUNK_ERR, true);
-                    editor.apply();
-                    Log.d(TAG, "Got ERROR from Chunk");
-                }
                 break;
             case Constants.ACTION_RECEIVED_ATAK_FORWARDER:
             case Constants.ACTION_RECEIVED_ATAK_PLUGIN: {
@@ -417,7 +413,12 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
                 }
 
                 if (prefs.getBoolean(Constants.PREF_PLUGIN_FILTER_BY_CHANNEL, false)) {
-                    int preferredChannel = prefs.getInt(Constants.PREF_PLUGIN_CHANNEL, 0);
+                    int preferredChannel;
+                    try {
+                        preferredChannel = Integer.parseInt(prefs.getString(Constants.PREF_PLUGIN_CHANNEL, "0"));
+                    } catch (NumberFormatException e) {
+                        preferredChannel = 0;
+                    }
                     if (ni.getChannel() != preferredChannel) {
                         Log.d(TAG, "Ignoring NodeInfo on channel " + ni.getChannel() + ", preferred: " + preferredChannel);
                         return;
@@ -729,264 +730,23 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
 
             }
 
+            // Fountain code packet - handle large message transfer
+            if (FountainPacket.isFountainPacket(raw)) {
+                Log.d(TAG, "Received fountain packet");
+                String senderNodeId = payload.getFrom();
+                int channel = payload.getChannel();
+                int hopLimit = payload.getHopLimit();
+                fountainChunkManager.handlePacket(raw, senderNodeId, channel, hopLimit);
+                return;
+            }
+
             String message = new String(payload.getBytes());
-            // user must opt-in for SWITCH message
-            if (message.startsWith("SWT") && prefs.getBoolean(Constants.PREF_PLUGIN_SWITCH, false)) {
-                Log.d(TAG, "Received Switch message");
-
-                // flag to indicate we're in file transfer mode
-                editor.putBoolean(Constants.PREF_PLUGIN_FILE_TRANSFER, true);
-                editor.apply();
-
-                sender = payload.getFrom();
-
-                byte[] config;
-                config = MeshtasticMapComponent.getConfig();
-
-                // capture old config
-                LocalOnlyProtos.LocalConfig c = null;
-                try {
-                    c = LocalOnlyProtos.LocalConfig.parseFrom(config);
-                } catch (InvalidProtocolBufferException e) {
-                    Log.d(TAG, "Failed to process Switch packet");
-                    e.printStackTrace();
-                    // Rollback state on error
-                    editor.putBoolean(Constants.PREF_PLUGIN_FILE_TRANSFER, false);
-                    editor.apply();
-                    return;
-                }
-
-                Log.d(TAG, "Config: " + c.toString());
-                ConfigProtos.Config.DeviceConfig dc = c.getDevice();
-                ConfigProtos.Config.LoRaConfig lc = c.getLora();
-                oldModemPreset = lc.getModemPreset().getNumber();
-
-                // set short/turbo for file transfer
-                ConfigProtos.Config.Builder configBuilder = ConfigProtos.Config.newBuilder();
-                AtomicReference<ConfigProtos.Config.LoRaConfig.Builder> loRaConfigBuilder = new AtomicReference<>(lc.toBuilder());
-                AtomicReference<ConfigProtos.Config.LoRaConfig.ModemPreset> modemPreset = new AtomicReference<>(ConfigProtos.Config.LoRaConfig.ModemPreset.forNumber(ConfigProtos.Config.LoRaConfig.ModemPreset.SHORT_TURBO_VALUE));
-                loRaConfigBuilder.get().setModemPreset(modemPreset.get());
-                configBuilder.setLora(loRaConfigBuilder.get());
-                boolean needReboot;
-
-                // if not already in short/turbo mode, switch to it
-                if (oldModemPreset != ConfigProtos.Config.LoRaConfig.ModemPreset.SHORT_TURBO_VALUE) {
-                    ((Activity)MapView.getMapView().getContext()).runOnUiThread(() -> {
-                        Toast.makeText(getMapView().getContext(), "Rebooting to Short/Turbo for file transfer", Toast.LENGTH_LONG).show();
-                    });
-                    needReboot = true;
-                } else {
-                    needReboot = false;
-                }
-
-                SharedPreferences.Editor finalEditor = editor;
-                new Thread(() -> {
-                    boolean shortTurboSet = false;
-                    try {
-                        // hopefully enough time to ACK the SWT command
-                        Thread.sleep(2000);
-
-                        // we gotta reboot to short/fast
-                        if (needReboot) {
-                            try {
-                                // flag to indicate we are rebooting into short/fast
-                                finalEditor.putBoolean(PREF_PLUGIN_SHORTTURBO, true);
-                                finalEditor.apply();
-                                shortTurboSet = true;
-                                MeshtasticMapComponent.setConfig(configBuilder.build().toByteArray());
-                                // wait for ourselves to switch to short/fast
-                                while (prefs.getBoolean(PREF_PLUGIN_SHORTTURBO, false))
-                                    Thread.sleep(1000);
-                                shortTurboSet = false; // Successfully switched
-                            } catch (InterruptedException e) {
-                                e.printStackTrace();
-                                // Reset flag if interrupted during reboot
-                                if (shortTurboSet) {
-                                    finalEditor.putBoolean(PREF_PLUGIN_SHORTTURBO, false);
-                                    finalEditor.apply();
-                                }
-                                return;
-                            }
-                        }
-
-                        // wait for file transfer to finish
-                        while(prefs.getBoolean(Constants.PREF_PLUGIN_FILE_TRANSFER, false))
-                            Thread.sleep(10000);
-
-                        if (needReboot) {
-                            // restore config
-                            loRaConfigBuilder.set(lc.toBuilder());
-                            modemPreset.set(ConfigProtos.Config.LoRaConfig.ModemPreset.forNumber(oldModemPreset));
-                            loRaConfigBuilder.get().setModemPreset(modemPreset.get());
-                            configBuilder.setLora(loRaConfigBuilder.get());
-                            MeshtasticMapComponent.setConfig(configBuilder.build().toByteArray());
-                        }
-
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
-                        // Ensure state is cleaned up on interruption
-                        if (shortTurboSet) {
-                            finalEditor.putBoolean(PREF_PLUGIN_SHORTTURBO, false);
-                            finalEditor.apply();
-                        }
-                    } catch (Exception e) {
-                        Log.e(TAG, "Unexpected error in SWT handler thread", e);
-                        // Ensure state is cleaned up on any error
-                        finalEditor.putBoolean(Constants.PREF_PLUGIN_FILE_TRANSFER, false);
-                        if (shortTurboSet) {
-                            finalEditor.putBoolean(PREF_PLUGIN_SHORTTURBO, false);
-                        }
-                        finalEditor.apply();
-                    }
-                }).start();
-
-            } else if (message.startsWith("MFT")) {
-                // sender side, recv file transfer over
-                Log.d(TAG, "Received File message completed");
-                editor = prefs.edit();
-                editor.putBoolean(Constants.PREF_PLUGIN_FILE_TRANSFER, false);
-                editor.apply();
-                
-                // Signal file transfer completion
+            if (message.startsWith("MFT")) {
+                // Sender side - received file transfer acknowledgment
+                Log.d(TAG, "Received MFT - file transfer complete");
                 FileTransferManager.getInstance().completeTransfer();
-            } else if (message.startsWith("CHK")) {
-                Log.d(TAG, "Received Chunked message");
-                chunking = true;
-                if (chunkSize == 0) {
-                    try {
-                        chunkSize = Integer.parseInt(message.split("_")[1]);
-                        Log.d(TAG, "Chunk size: " + chunkSize);
-                    } catch (Exception e) {
-                        Log.e(TAG, "Failed to parse chunk size", e);
-                        // Reset chunking state on error
-                        chunking = false;
-                        chunkSize = 0;
-                        return;
-                    }
-                }
-                int chunk_hdr_size = String.format(Locale.US, "CHK_%d_", chunkSize).getBytes().length;
-                byte[] chunk = new byte[payload.getBytes().length - chunk_hdr_size];
-                try {
-                    System.arraycopy(payload.getBytes(), chunk_hdr_size, chunk, 0, payload.getBytes().length - chunk_hdr_size);
-                } catch (Exception e) {
-                    e.printStackTrace();
-                    Log.d(TAG, "Failed to copy first chunk");
-                    // Don't continue processing if chunk copy failed
-                    return;
-                }
-
-                // check if this chunk has already been received
-                if (chunkMap.containsValue(chunk)) {
-                    Log.d(TAG, "Chunk already received");
-                    return;
-                } else {
-                    // Prevent unbounded growth - clear if too many chunks
-                    if (chunkMap.size() >= MAX_CHUNK_MAP_SIZE) {
-                        Log.w(TAG, "Chunk map exceeded maximum size, clearing");
-                        chunkMap.clear();
-                        chunking = false;
-                        chunkSize = 0;
-                        chunkCount = 0;
-                        return;
-                    }
-                    chunkMap.put(Integer.valueOf(chunkCount++), chunk);
-                }
-
-                if(prefs.getBoolean(Constants.PREF_PLUGIN_FILE_TRANSFER, false)) {
-                    // caclulate progress
-                    //zi = (xi – min(x)) / (max(x) – min(x)) * 100
-                    mBuilder.setProgress(100, (int) Math.floor((chunkMap.size() - 1) / (chunkSize - 1) * 100), false);
-                    mNotifyManager.notify(id, mBuilder.build());
-                }
-            } else if (message.startsWith("END") && chunking) {
-                Log.d(TAG, "Chunking");
-                byte[] combined = new byte[chunkSize];
-
-                int i = 0;
-                boolean copyFailed = false;
-                for (byte[] b : chunkMap.values()) {
-                    try {
-                        System.arraycopy(b, 0, combined, i, b.length);
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        Log.d(TAG, "Failed to copy in chunking");
-                        copyFailed = true;
-                        break;
-                    }
-                    i += b.length;
-                    Log.d(TAG, "" + i);
-                }
-
-                // done chunking clear accounting
-                chunkSize = 0;
-                chunking = false;
-                chunkMap.clear();
-                chunkCount = 0;
-                
-                // If copy failed, don't process the corrupted data
-                if (copyFailed) {
-                    Log.e(TAG, "Chunk assembly failed, discarding data");
-                    return;
-                }
-
-                // this was a file transfer not chunks
-                if (prefs.getBoolean(Constants.PREF_PLUGIN_FILE_TRANSFER, false)) {
-                    Log.d(TAG, "File Received");
-
-                    mBuilder.setContentText("Transfer complete")
-                            // Removes the progress bar
-                            .setProgress(0,0,false);
-                    mNotifyManager.notify(id, mBuilder.build());
-
-                    try {
-                        String path = String.format(Locale.US, "%s/%s/%s.zip", Environment.getExternalStorageDirectory().getAbsolutePath(), "atak/tools/datapackage", UUID.randomUUID().toString());
-                        Log.d(TAG, "Writing to: " + path);
-                        Files.write(new File(path).toPath(), combined);
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
-
-                    // inform sender we're done recv
-                    DataPacket dp = new DataPacket(sender, new byte[]{'M', 'F', 'T'}, Portnums.PortNum.ATAK_FORWARDER_VALUE, DataPacket.ID_LOCAL, System.currentTimeMillis(), 0, MessageStatus.UNKNOWN, getHopLimit(), getChannelIndex(), getWantsAck(), 0, 0f, 0, null, null, 0, false);
-                    MeshtasticMapComponent.sendToMesh(dp);
-                    try {
-                        Thread.sleep(3000);
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
-                        Log.d(TAG, "MFT interrupted");
-                    }
-
-                    //receive side, file transfer over
-                    editor = prefs.edit();
-                    editor.putBoolean(Constants.PREF_PLUGIN_FILE_TRANSFER, false);
-                    editor.apply();
-                    return;
-                }
-                try {
-                    EXIFactory exiFactory = DefaultEXIFactory.newInstance();
-                    StringWriter writer = new StringWriter();
-                    Result result = new StreamResult(writer);
-                    InputSource is = new InputSource(new ByteArrayInputStream(combined));
-                    SAXSource exiSource = new EXISource(exiFactory);
-                    exiSource.setInputSource(is);
-                    TransformerFactory tf = XMLUtils.getTransformerFactory();
-                    Transformer transformer = tf.newTransformer();
-                    transformer.transform(exiSource, result);
-                    CotEvent cotEvent = CotEvent.parse(writer.toString());
-
-                    if (cotEvent.isValid()) {
-                        Log.d(TAG, "Chunked CoT Received");
-                        CotMapComponent.getInternalDispatcher().dispatch(cotEvent);
-                        if (prefs.getBoolean(Constants.PREF_PLUGIN_SERVER, false)) {
-                            CotMapComponent.getExternalDispatcher().dispatch(cotEvent);
-                        }
-                    } else {
-                        Log.d(TAG, "Failed to chunk: " + new String(combined));
-                    }
-                } catch (Throwable e) {
-                    e.printStackTrace();
-                }
             } else {
+                // Try to decode as EXI (compressed XML CoT)
                 try {
                     EXIFactory exiFactory = DefaultEXIFactory.newInstance();
                     StringWriter writer = new StringWriter();
@@ -1398,7 +1158,12 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
 
     public static int getHopLimit() {
         try {
-            int hopLimit = prefs.getInt(Constants.PREF_PLUGIN_HOP_LIMIT, 3);
+            int hopLimit;
+            try {
+                hopLimit = Integer.parseInt(prefs.getString(Constants.PREF_PLUGIN_HOP_LIMIT, "3"));
+            } catch (NumberFormatException e) {
+                hopLimit = 3;
+            }
             Log.d(TAG, "Hop Limit: " + hopLimit);
             if (hopLimit > 8) {
                 hopLimit = 8;
@@ -1412,7 +1177,12 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
 
     public static int getChannelIndex() {
         try {
-            int channel = prefs.getInt(Constants.PREF_PLUGIN_CHANNEL, 0);
+            int channel;
+            try {
+                channel = Integer.parseInt(prefs.getString(Constants.PREF_PLUGIN_CHANNEL, "0"));
+            } catch (NumberFormatException e) {
+                channel = 0;
+            }
             Log.d(TAG, "Channel: " + channel);
             return channel;
         } catch (Exception e) {
@@ -1637,6 +1407,107 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
         Log.d(TAG, "Codec2 reinitialized with mode 700C, samples per frame: " + samplesBufSize);
     }
     
+    /**
+     * Process data received via fountain codes.
+     * Uses transferType to determine how to handle the data.
+     *
+     * @param data The decoded data
+     * @param senderNodeId The sender's node ID (for sending MFT acknowledgment)
+     * @param transferType The type of transfer (Constants.TRANSFER_TYPE_COT or TRANSFER_TYPE_FILE)
+     */
+    private void processFountainData(byte[] data, String senderNodeId, byte transferType) {
+        // Handle file transfer
+        if (transferType == Constants.TRANSFER_TYPE_FILE) {
+            Log.d(TAG, "Fountain File Received: " + data.length + " bytes from " + senderNodeId);
+
+            mBuilder.setContentText("Transfer complete")
+                    .setProgress(0, 0, false);
+            mNotifyManager.notify(id, mBuilder.build());
+
+            try {
+                String path = String.format(Locale.US, "%s/%s/%s.zip",
+                        Environment.getExternalStorageDirectory().getAbsolutePath(),
+                        "atak/tools/datapackage", UUID.randomUUID().toString());
+                Log.d(TAG, "Writing to: " + path);
+                Files.write(new File(path).toPath(), data);
+            } catch (IOException e) {
+                Log.e(TAG, "Failed to write file", e);
+            }
+
+            // Send MFT (file transfer complete) back to sender
+            if (senderNodeId != null) {
+                Log.d(TAG, "Sending MFT to " + senderNodeId);
+                DataPacket dp = new DataPacket(
+                        senderNodeId,
+                        new byte[]{'M', 'F', 'T'},
+                        Portnums.PortNum.ATAK_FORWARDER_VALUE,
+                        DataPacket.ID_LOCAL,
+                        System.currentTimeMillis(),
+                        0,
+                        MessageStatus.UNKNOWN,
+                        getHopLimit(),
+                        getChannelIndex(),
+                        getWantsAck(),
+                        0, 0f, 0, null, null, 0, false
+                );
+                MeshtasticMapComponent.sendToMesh(dp);
+            }
+            return;
+        }
+
+        // Handle CoT data - try to decode as EXI (compressed XML)
+        Log.d(TAG, "Processing fountain CoT data: " + data.length + " bytes from " + senderNodeId);
+        if (data.length >= 16) {
+            Log.d(TAG, "Receiver CoT first 16 bytes: " + String.format(
+                "%02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+                data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+                data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15]));
+        } else if (data.length >= 4) {
+            Log.d(TAG, "Receiver CoT first bytes: " + String.format("%02X %02X %02X %02X",
+                data[0], data[1], data[2], data[3]));
+        }
+        // Log hash of received data for comparison with sender
+        byte[] receivedHash = FountainPacket.computeHash(data);
+        Log.d(TAG, "Receiver CoT data hash: " + bytesToHex(receivedHash));
+        try {
+            EXIFactory exiFactory = DefaultEXIFactory.newInstance();
+            StringWriter writer = new StringWriter();
+            Result result = new StreamResult(writer);
+            InputSource is = new InputSource(new ByteArrayInputStream(data));
+            SAXSource exiSource = new EXISource(exiFactory);
+            exiSource.setInputSource(is);
+            TransformerFactory tf = XMLUtils.getTransformerFactory();
+            Transformer transformer = tf.newTransformer();
+            transformer.transform(exiSource, result);
+            String xmlStr = writer.toString();
+            Log.d(TAG, "Fountain EXI decoded to XML: " + xmlStr.length() + " chars");
+            CotEvent cotEvent = CotEvent.parse(xmlStr);
+
+            if (cotEvent.isValid()) {
+                Log.d(TAG, "Fountain CoT Received and dispatched");
+                CotMapComponent.getInternalDispatcher().dispatch(cotEvent);
+                if (prefs.getBoolean(Constants.PREF_PLUGIN_SERVER, false)) {
+                    CotMapComponent.getExternalDispatcher().dispatch(cotEvent);
+                }
+            } else {
+                Log.w(TAG, "Fountain data not valid CoT: " + data.length + " bytes, xml=" + xmlStr.substring(0, Math.min(200, xmlStr.length())));
+            }
+        } catch (Throwable e) {
+            Log.e(TAG, "Failed to process fountain data as EXI: " + e.getClass().getName() + ": " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    // Helper to convert bytes to hex string for logging
+    private static String bytesToHex(byte[] bytes) {
+        if (bytes == null) return "null";
+        StringBuilder sb = new StringBuilder();
+        for (byte b : bytes) {
+            sb.append(String.format("%02X", b));
+        }
+        return sb.toString();
+    }
+
     /**
      * Clean up resources when the receiver is unregistered
      */

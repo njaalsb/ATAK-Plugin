@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 
-
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
@@ -16,14 +15,176 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/app_name" />
+            android:text="@string/app_name"
+            android:textStyle="bold"
+            android:textSize="18sp"
+            android:paddingBottom="8dp" />
 
-        />
+        <!-- Device Metrics Section -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="#22000000"
+            android:padding="8dp"
+            android:layout_marginBottom="8dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Device Metrics"
+                    android:textStyle="bold"
+                    android:textSize="14sp" />
+
+                <Button
+                    android:id="@+id/refreshMetricsBtn"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:text="Refresh"
+                    android:textSize="12sp"
+                    android:minWidth="0dp"
+                    android:paddingLeft="12dp"
+                    android:paddingRight="12dp" />
+            </LinearLayout>
+
+            <TableLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:stretchColumns="1"
+                android:layout_marginTop="4dp">
+
+                <TableRow>
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Node:"
+                        android:paddingRight="8dp" />
+                    <TextView
+                        android:id="@+id/metricsNodeName"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="--" />
+                </TableRow>
+
+                <TableRow>
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Model:"
+                        android:paddingRight="8dp" />
+                    <TextView
+                        android:id="@+id/metricsModel"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="--" />
+                </TableRow>
+
+                <TableRow>
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Firmware:"
+                        android:paddingRight="8dp" />
+                    <TextView
+                        android:id="@+id/metricsFirmware"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="--" />
+                </TableRow>
+
+                <TableRow>
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Battery:"
+                        android:paddingRight="8dp" />
+                    <TextView
+                        android:id="@+id/metricsBattery"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="--" />
+                </TableRow>
+
+                <TableRow>
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Voltage:"
+                        android:paddingRight="8dp" />
+                    <TextView
+                        android:id="@+id/metricsVoltage"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="--" />
+                </TableRow>
+
+                <TableRow>
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Ch Util:"
+                        android:paddingRight="8dp" />
+                    <TextView
+                        android:id="@+id/metricsChUtil"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="--" />
+                </TableRow>
+
+                <TableRow>
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Air TX:"
+                        android:paddingRight="8dp" />
+                    <TextView
+                        android:id="@+id/metricsAirTx"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="--" />
+                </TableRow>
+
+                <TableRow>
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Uptime:"
+                        android:paddingRight="8dp" />
+                    <TextView
+                        android:id="@+id/metricsUptime"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="--" />
+                </TableRow>
+
+                <TableRow>
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Nodes:"
+                        android:paddingRight="8dp" />
+                    <TextView
+                        android:id="@+id/metricsNodeCount"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="--" />
+                </TableRow>
+
+            </TableLayout>
+        </LinearLayout>
+
+        <!-- Voice Controls Section -->
         <Button
             android:layout_width="wrap_content"
             android:layout_height="match_parent"
             android:text="All Talk"
-
             android:id="@+id/talk" />
 
         <Button
@@ -31,18 +192,11 @@
             android:layout_height="wrap_content"
             android:id="@+id/voiceMemoBtn"
             android:text="Speech to Text" />
+
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:id="@+id/tv" />
-
-        <!--
-        <Button
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:id="@+id/configBtn"
-            android:text="Config" />
-            -->
 
     </LinearLayout>
 </ScrollView>

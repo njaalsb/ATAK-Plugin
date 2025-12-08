@@ -1,6 +1,8 @@
 .DS_Store
+.claude/
 .gradle/
-.idea/
+.kotlin/
+.
 app/build/
 #built application files
 *.apk
@@ -29,6 +31,6 @@ Thumbs.db
 
 # Android Studio
 *.iml
-.idea
+.idea/
 .takdev/
 *.keystore

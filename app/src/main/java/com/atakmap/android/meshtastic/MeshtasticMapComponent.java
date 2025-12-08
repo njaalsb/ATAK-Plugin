@@ -16,7 +16,8 @@ import com.atakmap.android.maps.MapView;
 import com.atakmap.android.meshtastic.cot.CotEventProcessor;
 import com.atakmap.android.meshtastic.plugin.R;
 import com.atakmap.android.meshtastic.service.MeshServiceManager;
-import com.atakmap.android.meshtastic.util.ChunkManager;
+import com.atakmap.android.meshtastic.util.fountain.FountainChunkManager;
+import com.atakmap.android.meshtastic.util.fountain.FountainPacket;
 import com.atakmap.android.meshtastic.util.Constants;
 import com.atakmap.android.meshtastic.util.NotificationHelper;
 import com.atakmap.app.preferences.ToolsPreferenceFragment;
@@ -69,20 +70,19 @@ public class MeshtasticMapComponent extends DropDownMapComponent
     private MeshtasticReceiver mr;
     private final MeshtasticExternalGPS meshtasticExternalGPS;
     private MeshtasticSender meshtasticSender;
-    
+
     // Services and Managers
     private MeshServiceManager meshServiceManager;
     private NotificationHelper notificationHelper;
-    private ChunkManager chunkManager;
+    private FountainChunkManager fountainChunkManager;
+
+    // Static reference to the singleton instance
+    private static MeshtasticMapComponent instance;
     private CotEventProcessor cotEventProcessor;
     
     // UI Components
     public static MeshtasticWidget mw;
-    
-    // Connection state management
-    public static volatile MeshServiceManager.ServiceConnectionState mConnectionState = MeshServiceManager.ServiceConnectionState.DISCONNECTED;
-    private static final Object CONNECTION_STATE_LOCK = new Object();
-    
+
     // Preferences
     private SharedPreferences prefs;
     private SharedPreferences.Editor editor;
@@ -92,7 +92,6 @@ public class MeshtasticMapComponent extends DropDownMapComponent
     
     public MeshtasticMapComponent() {
         meshtasticExternalGPS = new MeshtasticExternalGPS(new PositionToNMEAMapper());
-        chunkManager = new ChunkManager();
         cotEventProcessor = new CotEventProcessor();
         executorService = Executors.newCachedThreadPool();
     }
@@ -123,6 +122,7 @@ public class MeshtasticMapComponent extends DropDownMapComponent
     
     @Override
     public void onCreate(final Context context, Intent intent, MapView view) {
+        instance = this;
         CommsMapComponent.getInstance().registerPreSendProcessor(this);
         context.setTheme(R.style.ATAKPluginTheme);
         pluginContext = context;
@@ -144,7 +144,6 @@ public class MeshtasticMapComponent extends DropDownMapComponent
             PreferenceManager.getDefaultSharedPreferences(MapView.getMapView().getContext())
         );
         editor = prefs.edit();
-        editor.putBoolean(Constants.PREF_PLUGIN_FILE_TRANSFER, false);
         editor.putBoolean(Constants.PREF_PLUGIN_CHUNKING, false);
         editor.apply();
         prefs.registerOnSharedPreferenceChangeListener(this);
@@ -156,8 +155,12 @@ public class MeshtasticMapComponent extends DropDownMapComponent
             meshtasticExternalGPS.start(gpsPort);
         }
         
+        // Setup fountain chunk manager for large message transfers
+        String localNodeId = prefs.getString(Constants.PREF_PLUGIN_LOCAL_NODE_ID, "local");
+        fountainChunkManager = new FountainChunkManager(meshServiceManager, localNodeId);
+
         // Setup receiver
-        mr = new MeshtasticReceiver(meshtasticExternalGPS);
+        mr = new MeshtasticReceiver(meshtasticExternalGPS, fountainChunkManager);
         IntentFilter intentFilter = getIntentFilter();
         view.getContext().registerReceiver(mr, intentFilter, Context.RECEIVER_EXPORTED);
         
@@ -195,7 +198,12 @@ public class MeshtasticMapComponent extends DropDownMapComponent
         if (mr != null) {
             mr.cleanup();
         }
-        
+
+        // Shutdown fountain chunk manager
+        if (fountainChunkManager != null) {
+            fountainChunkManager.shutdown();
+        }
+
         meshServiceManager.disconnect();
         view.getContext().unregisterReceiver(mr);
         if (mw != null) {
@@ -205,7 +213,7 @@ public class MeshtasticMapComponent extends DropDownMapComponent
         ToolsPreferenceFragment.unregister(pluginContext.getString(R.string.meshtastic_preferences));
         URIContentManager.getInstance().unregisterSender(meshtasticSender);
         meshtasticExternalGPS.stop();
-        
+
         // Shutdown executor service
         if (executorService != null) {
             executorService.shutdown();
@@ -229,13 +237,9 @@ public class MeshtasticMapComponent extends DropDownMapComponent
             return;
         }
         
-        // Check if file transfer or chunking in progress
-        if (prefs.getBoolean(Constants.PREF_PLUGIN_FILE_TRANSFER, false)) {
-            Log.d(TAG, "File transfer in progress");
-            return;
-        }
+        // Check if transfer in progress
         if (prefs.getBoolean(Constants.PREF_PLUGIN_CHUNKING, false)) {
-            Log.d(TAG, "Chunking in progress");
+            Log.d(TAG, "Transfer in progress");
             return;
         }
         
@@ -259,9 +263,15 @@ public class MeshtasticMapComponent extends DropDownMapComponent
 
             if (prefs.getBoolean(Constants.PREF_PLI_RATE_ENABLED, false)) {
                 long lastPLITime = cotEventProcessor.getLastPLITime();
-                int rateLimitMs = prefs.getInt(Constants.PREF_PLI_RATE_VALUE, 0) * 1000;
+                int rateLimitSeconds;
+                try {
+                    rateLimitSeconds = Integer.parseInt(prefs.getString(Constants.PREF_PLI_RATE_VALUE, "60"));
+                } catch (NumberFormatException e) {
+                    rateLimitSeconds = 60; // Default to 1 minute
+                }
+                long rateLimitMs = rateLimitSeconds * 1000L;
                 if (currentTime - lastPLITime < rateLimitMs) {
-                    Log.d(TAG, "PLI rate limit - skipping self PLI");
+                    Log.d(TAG, "PLI rate limit - skipping self PLI (limit: " + rateLimitSeconds + "s)");
                     return;
                 }
             }
@@ -456,8 +466,8 @@ public class MeshtasticMapComponent extends DropDownMapComponent
             
             Log.d(TAG, "Size: " + cotAsBytes.length);
             
-            // Small messages can be sent directly
-            if (cotAsBytes.length < 236) {
+            // Small messages can be sent directly (max payload is 233 bytes)
+            if (cotAsBytes.length < 233) {
                 Log.d(TAG, "Small send");
                 DataPacket dp = new DataPacket(
                     DataPacket.ID_BROADCAST,
@@ -482,28 +492,37 @@ public class MeshtasticMapComponent extends DropDownMapComponent
                 return;
             }
             
-            // Large messages need chunking
+            // Large messages need fountain coding
             editor.putBoolean(Constants.PREF_PLUGIN_CHUNKING, true);
             editor.apply();
-            
-            try {
-                boolean success = chunkManager.sendChunkedData(
-                    cotAsBytes,
-                    meshServiceManager.getService(),
-                    prefs,
-                    hopLimit,
-                    channel
-                );
-                
-                if (!success) {
-                    Log.e(TAG, "Failed to send chunked data");
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "Chunking failed", e);
-            } finally {
-                editor.putBoolean(Constants.PREF_PLUGIN_CHUNKING, false);
-                editor.apply();
+
+            // Log EXI data details for debugging
+            Log.d(TAG, "Sender EXI data: " + cotAsBytes.length + " bytes");
+            if (cotAsBytes.length >= 16) {
+                Log.d(TAG, "Sender EXI first 16 bytes: " + String.format(
+                    "%02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+                    cotAsBytes[0], cotAsBytes[1], cotAsBytes[2], cotAsBytes[3],
+                    cotAsBytes[4], cotAsBytes[5], cotAsBytes[6], cotAsBytes[7],
+                    cotAsBytes[8], cotAsBytes[9], cotAsBytes[10], cotAsBytes[11],
+                    cotAsBytes[12], cotAsBytes[13], cotAsBytes[14], cotAsBytes[15]));
+            } else if (cotAsBytes.length >= 4) {
+                Log.d(TAG, "Sender EXI first bytes: " + String.format("%02X %02X %02X %02X",
+                    cotAsBytes[0], cotAsBytes[1], cotAsBytes[2], cotAsBytes[3]));
             }
+            // Log hash of data for comparison with receiver
+            byte[] senderHash = FountainPacket.computeHash(cotAsBytes);
+            Log.d(TAG, "Sender EXI data hash: " + bytesToHex(senderHash));
+
+            int transferId = fountainChunkManager.send(cotAsBytes, channel, hopLimit, Constants.TRANSFER_TYPE_COT);
+            if (transferId < 0) {
+                Log.e(TAG, "Failed to start fountain transfer");
+            } else {
+                Log.d(TAG, "Started fountain transfer " + transferId);
+            }
+
+            // Note: PREF_PLUGIN_CHUNKING will be cleared when transfer completes via callback
+            editor.putBoolean(Constants.PREF_PLUGIN_CHUNKING, false);
+            editor.apply();
         });
     }
     
@@ -557,25 +576,29 @@ public class MeshtasticMapComponent extends DropDownMapComponent
     public static boolean sendFile(File f) {
         try {
             byte[] fileBytes = FileSystemUtils.read(f);
-            ChunkManager chunkManager = new ChunkManager();
-            MeshServiceManager manager = MeshServiceManager.getInstance(MapView.getMapView().getContext());
-            SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(MapView.getMapView().getContext());
-            
+
             NotificationHelper notificationHelper = NotificationHelper.getInstance(MapView.getMapView().getContext());
-            
-            boolean success = chunkManager.sendChunkedData(
-                fileBytes,
-                manager.getService(),
-                prefs,
-                MeshtasticReceiver.getHopLimit(),
-                MeshtasticReceiver.getChannelIndex()
-            );
-            
-            if (success) {
-                notificationHelper.showCompletionNotification();
+
+            // Use the singleton FountainChunkManager instance
+            FountainChunkManager fcm = getFountainChunkManager();
+            if (fcm == null) {
+                Log.e(TAG, "FountainChunkManager not initialized");
+                return false;
             }
-            
-            return success;
+
+            int transferId = fcm.send(
+                fileBytes,
+                MeshtasticReceiver.getChannelIndex(),
+                MeshtasticReceiver.getHopLimit(),
+                Constants.TRANSFER_TYPE_FILE
+            );
+
+            if (transferId >= 0) {
+                notificationHelper.showCompletionNotification();
+                return true;
+            }
+
+            return false;
         } catch (Exception e) {
             Log.e(TAG, "Failed to send file", e);
             return false;
@@ -630,10 +653,18 @@ public class MeshtasticMapComponent extends DropDownMapComponent
     public static MeshServiceManager getMeshService() {
         return MeshServiceManager.getInstance(MapView.getMapView().getContext());
     }
-    
-    // Re-export ServiceConnectionState for compatibility
-    public static class ServiceConnectionState {
-        public static final MeshServiceManager.ServiceConnectionState CONNECTED = MeshServiceManager.ServiceConnectionState.CONNECTED;
-        public static final MeshServiceManager.ServiceConnectionState DISCONNECTED = MeshServiceManager.ServiceConnectionState.DISCONNECTED;
+
+    public static FountainChunkManager getFountainChunkManager() {
+        return instance != null ? instance.fountainChunkManager : null;
+    }
+
+    // Helper to convert bytes to hex string for logging
+    private static String bytesToHex(byte[] bytes) {
+        if (bytes == null) return "null";
+        StringBuilder sb = new StringBuilder();
+        for (byte b : bytes) {
+            sb.append(String.format("%02X", b));
+        }
+        return sb.toString();
     }
 }

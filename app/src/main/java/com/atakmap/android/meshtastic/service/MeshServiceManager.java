@@ -121,21 +121,42 @@ public class MeshServiceManager {
         return connectionState == ServiceConnectionState.CONNECTED && meshService != null;
     }
     
+    // Maximum payload size (Meshtastic app rejects exactly 233 bytes, use 231 for safety)
+    private static final int MAX_PAYLOAD_SIZE = 231;
+
     public void sendToMesh(DataPacket dataPacket) {
         if (dataPacket == null) {
             Log.w(TAG, "Cannot send null packet to mesh");
             return;
         }
-        
+
+        // Client-side validation to prevent service exceptions that cause
+        // deserialization failures on some Android versions
+        byte[] bytes = dataPacket.getBytes();
+        if (bytes == null) {
+            Log.w(TAG, "Cannot send packet with null bytes to mesh");
+            return;
+        }
+
+        if (dataPacket.getDataType() == 0) {
+            Log.w(TAG, "Cannot send packet with dataType 0 (port numbers must be non-zero)");
+            return;
+        }
+
+        if (bytes.length > MAX_PAYLOAD_SIZE) {
+            Log.w(TAG, "Cannot send packet - message too long (" + bytes.length + " > " + MAX_PAYLOAD_SIZE + " bytes)");
+            return;
+        }
+
         if (!isConnected()) {
             Log.w(TAG, "Cannot send to mesh - service not connected");
             return;
         }
-        
+
         try {
             Log.d(TAG, "Sending to mesh: " + dataPacket.getTo());
             meshService.send(dataPacket);
-        } catch (RemoteException e) {
+        } catch (Exception e) {
             Log.e(TAG, "Failed to send to mesh", e);
         }
     }
@@ -145,10 +166,10 @@ public class MeshServiceManager {
             Log.w(TAG, "Cannot set owner - service not connected");
             return;
         }
-        
+
         try {
             meshService.setOwner(meshUser);
-        } catch (RemoteException e) {
+        } catch (Exception e) {
             Log.e(TAG, "Failed to set owner", e);
         }
     }
@@ -158,10 +179,10 @@ public class MeshServiceManager {
             Log.w(TAG, "Cannot set channel - service not connected");
             return;
         }
-        
+
         try {
             meshService.setChannel(channel);
-        } catch (RemoteException e) {
+        } catch (Exception e) {
             Log.e(TAG, "Failed to set channel", e);
         }
     }
@@ -171,10 +192,10 @@ public class MeshServiceManager {
             Log.w(TAG, "Cannot set config - service not connected");
             return;
         }
-        
+
         try {
             meshService.setConfig(config);
-        } catch (RemoteException e) {
+        } catch (Exception e) {
             Log.e(TAG, "Failed to set config", e);
         }
     }
@@ -184,10 +205,10 @@ public class MeshServiceManager {
             Log.w(TAG, "Cannot get channel set - service not connected");
             return null;
         }
-        
+
         try {
             return meshService.getChannelSet();
-        } catch (RemoteException e) {
+        } catch (Exception e) {
             Log.e(TAG, "Failed to get channel set", e);
             return null;
         }
@@ -198,10 +219,10 @@ public class MeshServiceManager {
             Log.w(TAG, "Cannot get config - service not connected");
             return null;
         }
-        
+
         try {
             return meshService.getConfig();
-        } catch (RemoteException e) {
+        } catch (Exception e) {
             Log.e(TAG, "Failed to get config", e);
             return null;
         }
@@ -226,10 +247,10 @@ public class MeshServiceManager {
             Log.w(TAG, "Cannot get my node info - service not connected");
             return null;
         }
-        
+
         try {
             return meshService.getMyNodeInfo();
-        } catch (RemoteException e) {
+        } catch (Exception e) {
             Log.e(TAG, "Failed to get my node info", e);
             return null;
         }
@@ -240,16 +261,16 @@ public class MeshServiceManager {
             Log.w(TAG, "Cannot get my node ID - service not connected");
             return "";
         }
-        
+
         try {
             return meshService.getMyId();
-        } catch (RemoteException e) {
+        } catch (Exception e) {
             Log.e(TAG, "Failed to get my node ID", e);
             return "";
         }
     }
     
-    public int getPacketId() throws RemoteException {
+    public int getPacketId() throws Exception {
         if (!isConnected()) {
             throw new IllegalStateException("Service not connected");
         }
