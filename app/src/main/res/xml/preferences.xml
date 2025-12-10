@@ -1,115 +1,132 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
-    <PreferenceCategory android:title="@string/preferences_title" />
+
+    <!-- Mesh Settings -->
+    <PreferenceCategory android:title="Mesh Settings" />
+
+    <com.atakmap.android.gui.PanListPreference
+        android:key="plugin_meshtastic_channel"
+        android:title="Meshtastic Channel Index"
+        android:summary="Select the Meshtastic channel to use for ATAK traffic"
+        android:dialogTitle="Meshtastic Channel"
+        android:entries="@array/channel_names"
+        android:entryValues="@array/channel_values"
+        android:defaultValue="0" />
+
+    <com.atakmap.android.gui.PanSwitchPreference
+        android:key="plugin_meshtastic_channel_filter"
+        android:title="Filter by Channel Index"
+        android:summary="Only receive messages from the specified channel"
+        android:defaultValue="false"/>
+
+    <com.atakmap.android.gui.PanListPreference
+        android:key="plugin_meshtastic_hop_limit"
+        android:title="Hop Limit"
+        android:summary="Maximum number of hops for outgoing messages"
+        android:dialogTitle="Hop Limit"
+        android:entries="@array/hop_limit_names"
+        android:entryValues="@array/hop_limit_values"
+        android:defaultValue="3" />
+
+    <com.atakmap.android.gui.PanSwitchPreference
+        android:key="plugin_meshtastic_wantAck"
+        android:title="Request ACK"
+        android:summary="Request delivery acknowledgment (increases channel usage)"
+        android:defaultValue="false"/>
+
+    <!-- PLI & Reporting -->
+    <PreferenceCategory android:title="PLI &amp; Reporting" />
+
     <com.atakmap.android.gui.PanSwitchPreference
         android:key="plugin_meshtastic_pli_rate_limit"
-        android:title="Enable PLI reporting rate controls"
-        android:summary="If enabled, self PLI reporting rate will be limited over Meshtastic"
-        android:dialogTitle="Enable self reporting rate controls"
+        android:title="Limit PLI Reporting Rate"
+        android:summary="Reduce PLI frequency to conserve mesh bandwidth"
         android:defaultValue="false"/>
+
     <com.atakmap.android.gui.PanListPreference
         android:key="plugin_meshtastic_pli_rate_limit_value"
-        android:title="Reporting rate"
-        android:summary="Select PLI reporting rate for Meshtastic"
-        android:dialogTitle="Reporting rate"
+        android:title="PLI Reporting Interval"
+        android:summary="How often to send position updates (requires rate limit enabled)"
+        android:dialogTitle="PLI Interval"
         android:entries="@array/rates"
         android:entryValues="@array/rate_values"
-        android:dependency="plugin_meshtastic_pli_rate_limit"
-        android:defaultValue="1"/>
-    <com.atakmap.android.gui.PanSwitchPreference
-        android:key="plugin_meshtastic_server"
-        android:title="Enable relay to server"
-        android:summary="If enabled, messages from Meshtastic will relay to connected TAK servers"
-        android:dialogTitle="Enable relay to server"
-        android:defaultValue="false"/>
-    <com.atakmap.android.gui.PanSwitchPreference
-        android:key="plugin_meshtastic_from_server"
-        android:title="Enable relay from server"
-        android:summary="If enabled, messages from TAK Server will relay to Meshtastic (PLI/Chat only)"
-        android:dialogTitle="Enable relay from server"
-        android:defaultValue="false"/>
-    <com.atakmap.android.gui.PanSwitchPreference
-    android:key="plugin_meshtastic_tracker"
-        android:title="Show all Meshtastic devices"
-        android:summary="If enabled, all Meshtastic devices will be shown on the map"
-        android:dialogTitle="Show all Meshtastic devices"
-        android:defaultValue="false"/>
-    <com.atakmap.android.gui.PanSwitchPreference
-        android:key="plugin_meshtastic_nogps"
-        android:title="Don't show Meshtastic devices without GPS"
-        android:summary="If enabled, Meshtastic devices without GPS will not be shown on the map"
-        android:dialogTitle="Don't show Meshtastic devices without GPS"
-        android:defaultValue="false"/>
-    <com.atakmap.android.gui.PanSwitchPreference
-        android:key="plugin_meshtastic_external_gps"
-        android:title="Use Meshtastic GPS as External GPS"
-        android:summary="If enabled, the plugin will forward the GPS data from Meshtastic node to the ATAK external GPS port. Set GPS option to ignore internal GPS to use this option."
-        android:dialogTitle="Use Meshtastic GPS as External GPS"
-        android:defaultValue="false"/>
-    <com.atakmap.android.gui.PanSwitchPreference
-        android:key="plugin_meshtastic_self"
-        android:title="Do not show your local Meshtastic node"
-        android:summary="If enabled, your local Meshtastic node will not be shown on the map"
-        android:dialogTitle="Do not show your local Meshtastic node"
-        android:dependency="plugin_meshtastic_tracker"
-        android:defaultValue="false"/>
-    <com.atakmap.android.gui.PanSwitchPreference
-    android:key="plugin_meshtastic_rate"
-        android:title="Enable reporting rate controls"
-        android:summary="If enabled, ATAK will switch to Constant reporting mode"
-        android:dialogTitle="Enable reporting rate controls"
-        android:defaultValue="false"/>
-    <com.atakmap.android.gui.PanListPreference
-    android:key="plugin_meshtastic_rate_value"
-        android:title="Reporting rate"
-        android:summary="Select ATAK's constant reporting rate in minutes"
-        android:dialogTitle="Reporting rate"
-        android:entries="@array/rates"
-        android:entryValues="@array/rate_values"
-        android:dependency="plugin_meshtastic_rate"
-        android:defaultValue="1"/>
+        android:defaultValue="300"/>
+
     <com.atakmap.android.gui.PanSwitchPreference
         android:key="plugin_meshtastic_plichat_only"
-        android:title="Only send PLI and Chat messages over Meshtastic"
-        android:summary="If enabled, only PLI and Chat messages will be sent over Meshtastic"
-        android:dialogTitle="Only send PLI and Chat messages over Meshtastic"
+        android:title="Only Send PLI and Chat"
+        android:summary="Use optimized protobuf format (recommended for Meshtastic)"
+        android:defaultValue="true"/>
+
+    <!-- Display Settings -->
+    <PreferenceCategory android:title="Display Settings" />
+
+    <com.atakmap.android.gui.PanSwitchPreference
+        android:key="plugin_meshtastic_tracker"
+        android:title="Show Meshtastic Devices"
+        android:summary="Display all Meshtastic nodes as markers on the map"
         android:defaultValue="false"/>
+
+    <com.atakmap.android.gui.PanSwitchPreference
+        android:key="plugin_meshtastic_nogps"
+        android:title="Hide Devices Without GPS"
+        android:summary="Don't show nodes reporting 0,0 coordinates (requires Show Meshtastic Devices)"
+        android:defaultValue="false"/>
+
+    <com.atakmap.android.gui.PanSwitchPreference
+        android:key="plugin_meshtastic_self"
+        android:title="Hide Local Node"
+        android:summary="Don't show your own Meshtastic device (requires Show Meshtastic Devices)"
+        android:defaultValue="false"/>
+
+    <!-- Server Relay -->
+    <PreferenceCategory android:title="Server Relay" />
+
+    <com.atakmap.android.gui.PanSwitchPreference
+        android:key="plugin_meshtastic_server"
+        android:title="Relay to Server"
+        android:summary="Forward messages from Meshtastic to connected TAK servers"
+        android:defaultValue="false"/>
+
+    <com.atakmap.android.gui.PanSwitchPreference
+        android:key="plugin_meshtastic_from_server"
+        android:title="Relay from Server"
+        android:summary="Forward PLI and chat from TAK servers to Meshtastic"
+        android:defaultValue="false"/>
+
+    <!-- File Transfer -->
+    <PreferenceCategory android:title="File Transfer" />
+
+    <com.atakmap.android.gui.PanSwitchPreference
+        android:key="plugin_meshtastic_file_transfer"
+        android:title="Enable File Transfer"
+        android:summary="Allow sending files via Meshtastic (requires Short_Turbo preset, max 56KB)"
+        android:defaultValue="false"/>
+
+    <!-- Audio & Voice -->
+    <PreferenceCategory android:title="Audio &amp; Voice" />
+
     <com.atakmap.android.gui.PanSwitchPreference
         android:key="plugin_meshtastic_voice"
-        android:title="Use Text to Speech for incoming messages"
-        android:summary="If enabled, TTS will be used on Meshtastic text messages"
-        android:dialogTitle="Use Text to Speech for incoming messages"
+        android:title="Text to Speech"
+        android:summary="Read incoming Meshtastic text messages aloud"
         android:defaultValue="false"/>
+
     <com.atakmap.android.gui.PanEditTextPreference
         android:key="plugin_meshtastic_ptt"
         android:title="PTT KeyCode"
-        android:summary="Enter your PTT KeyCode value"
+        android:summary="Hardware button code for voice memo recording"
         android:dialogTitle="PTT KeyCode"
         android:inputType="number"
         android:defaultValue="79"/>
-    <com.atakmap.android.gui.PanEditTextPreference
-        android:key="plugin_meshtastic_channel"
-        android:title="Meshtastic Channel index"
-        android:summary="Specify the Meshtastic channel index to use"
-        android:dialogTitle="Meshtastic Channel"
-        android:inputType="number"
-        android:defaultValue="0" />
+
+    <!-- GPS Settings -->
+    <PreferenceCategory android:title="GPS Settings" />
+
     <com.atakmap.android.gui.PanSwitchPreference
-        android:key="plugin_meshtastic_channel_filter"
-        android:title="Filter by Meshtastic Channel Index"
-        android:summary="If enabled, only messages from the specified Meshtastic channel index will be processed"
+        android:key="plugin_meshtastic_external_gps"
+        android:title="Use Meshtastic GPS"
+        android:summary="Use Meshtastic device GPS as ATAK's external GPS source"
         android:defaultValue="false"/>
-    <com.atakmap.android.gui.PanEditTextPreference
-        android:key="plugin_meshtastic_hop_limit"
-        android:title="Meshtastic Hop Limit"
-        android:summary="Specify the Meshtastic hop limit (max 8)"
-        android:dialogTitle="Meshtastic Hop Limit"
-        android:inputType="number"
-        android:defaultValue="3" />
-    <com.atakmap.android.gui.PanSwitchPreference
-        android:key="plugin_meshtastic_wantAck"
-        android:title="Request ACK for outgoing messages"
-        android:summary="If enabled, the plugin will request an ACK for outgoing messages"
-        android:dialogTitle="Request ACK for outgoing messages"
-        android:defaultValue="true"/>
+
 </PreferenceScreen>

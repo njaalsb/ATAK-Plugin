@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- PLI Reporting Rates -->
     <string-array name="rates">
-        <item>1/2 minutes</item>
+        <item>30 seconds</item>
         <item>1 minute</item>
         <item>5 minutes</item>
         <item>10 minutes</item>
@@ -16,6 +17,50 @@
         <item>1200</item>
         <item>1800</item>
     </string-array>
+
+    <!-- Meshtastic Channel Index (0-7) -->
+    <string-array name="channel_names">
+        <item>Channel 0 (Primary)</item>
+        <item>Channel 1</item>
+        <item>Channel 2</item>
+        <item>Channel 3</item>
+        <item>Channel 4</item>
+        <item>Channel 5</item>
+        <item>Channel 6</item>
+        <item>Channel 7</item>
+    </string-array>
+    <string-array name="channel_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+        <item>5</item>
+        <item>6</item>
+        <item>7</item>
+    </string-array>
+
+    <!-- Hop Limit (1-7) -->
+    <string-array name="hop_limit_names">
+        <item>1 hop (Direct only)</item>
+        <item>2 hops</item>
+        <item>3 hops (Default)</item>
+        <item>4 hops</item>
+        <item>5 hops</item>
+        <item>6 hops</item>
+        <item>7 hops (Maximum)</item>
+    </string-array>
+    <string-array name="hop_limit_values">
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+        <item>5</item>
+        <item>6</item>
+        <item>7</item>
+    </string-array>
+
+    <!-- Codec2 Modes -->
     <string-array name="codec2_modes">
         <item>700C bps (Recommended)</item>
         <item>700B bps</item>

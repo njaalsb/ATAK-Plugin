@@ -1,9 +1,13 @@
 package com.atakmap.android.meshtastic.util.fountain;
 
+import com.atakmap.android.meshtastic.MeshtasticMapComponent;
 import com.atakmap.android.meshtastic.service.MeshServiceManager;
 import com.atakmap.coremap.log.Log;
+import com.google.protobuf.InvalidProtocolBufferException;
 import org.meshtastic.core.model.DataPacket;
 import org.meshtastic.core.model.MessageStatus;
+import org.meshtastic.proto.ConfigProtos;
+import org.meshtastic.proto.LocalOnlyProtos;
 import org.meshtastic.proto.Portnums;
 
 import java.util.ArrayList;
@@ -33,13 +37,130 @@ public class FountainChunkManager {
 
     // Configuration
     private static final int BLOCK_SIZE = FountainPacket.MAX_PAYLOAD_SIZE;
-    private static final double DEFAULT_OVERHEAD = 0.15;  // 15% extra blocks
     private static final int MAX_RETRIES = 3;
-    private static final long ACK_TIMEOUT_MS = 30000;  // 30 seconds
-    private static final long INTER_PACKET_DELAY_MS = 100;  // 100ms between packets
-    private static final long RECEIVE_TIMEOUT_MS = 60000;  // 60 second receive timeout
+    private static final long BASE_ACK_TIMEOUT_MS = 10000;  // 10 second base timeout for processing
+    private static final long MAX_ACK_TIMEOUT_MS = 300000;  // 5 minute max timeout for very slow presets
+    private static final long RECEIVE_TIMEOUT_MS = 300000;  // 5 minute receive timeout
     private static final long CLEANUP_INTERVAL_MS = 10000;  // 10 second cleanup interval
     private static final int MAX_DATA_SIZE = 64 * 1024;  // 64KB max
+
+    // Per-packet TX times (ms) for different modem presets
+    // These account for airtime + processing + mesh propagation overhead
+    // Values are approximate and include safety margin
+    private static final long TX_TIME_SHORT_TURBO = 100;    // ~50ms airtime + overhead
+    private static final long TX_TIME_SHORT_FAST = 200;     // ~100ms airtime + overhead
+    private static final long TX_TIME_SHORT_SLOW = 800;     // ~400ms airtime + overhead
+    private static final long TX_TIME_MEDIUM_FAST = 800;    // ~400ms airtime + overhead
+    private static final long TX_TIME_MEDIUM_SLOW = 1600;   // ~800ms airtime + overhead
+    private static final long TX_TIME_LONG_MODERATE = 2000; // ~1s airtime + overhead
+    private static final long TX_TIME_LONG_FAST = 3200;     // ~1.6s airtime + overhead
+    private static final long TX_TIME_LONG_SLOW = 6400;     // ~3.2s airtime + overhead
+    private static final long TX_TIME_DEFAULT = 1000;       // Default fallback
+
+    /**
+     * Get adaptive overhead based on K (number of source blocks).
+     * Smaller K needs more overhead because Robust Soliton distribution
+     * is less effective and there's less natural redundancy.
+     */
+    private static double getAdaptiveOverhead(int K) {
+        if (K <= 10) {
+            return 0.50;  // 50% overhead for very small transfers
+        } else if (K <= 50) {
+            return 0.25;  // 25% overhead for small transfers
+        } else {
+            return 0.15;  // 15% overhead for larger transfers
+        }
+    }
+
+    /**
+     * Get the current modem preset from Meshtastic config.
+     * @return ModemPreset enum value, or LONG_FAST (0) as default
+     */
+    private static int getCurrentModemPreset() {
+        try {
+            byte[] config = MeshtasticMapComponent.getConfig();
+            if (config == null || config.length == 0) {
+                Log.w(TAG, "Cannot get radio config, using default timing");
+                return ConfigProtos.Config.LoRaConfig.ModemPreset.LONG_FAST_VALUE;
+            }
+
+            LocalOnlyProtos.LocalConfig c = LocalOnlyProtos.LocalConfig.parseFrom(config);
+            ConfigProtos.Config.LoRaConfig lc = c.getLora();
+            int preset = lc.getModemPreset().getNumber();
+            Log.d(TAG, "Current modem preset: " + lc.getModemPreset().name() + " (" + preset + ")");
+            return preset;
+        } catch (InvalidProtocolBufferException e) {
+            Log.e(TAG, "Failed to parse config for modem preset", e);
+            return ConfigProtos.Config.LoRaConfig.ModemPreset.LONG_FAST_VALUE;
+        }
+    }
+
+    /**
+     * Get per-packet TX time based on modem preset.
+     * These times account for airtime, processing, and mesh propagation.
+     */
+    private static long getPerPacketTxTime(int modemPreset) {
+        switch (modemPreset) {
+            case ConfigProtos.Config.LoRaConfig.ModemPreset.SHORT_TURBO_VALUE:
+                return TX_TIME_SHORT_TURBO;
+            case ConfigProtos.Config.LoRaConfig.ModemPreset.SHORT_FAST_VALUE:
+                return TX_TIME_SHORT_FAST;
+            case ConfigProtos.Config.LoRaConfig.ModemPreset.SHORT_SLOW_VALUE:
+                return TX_TIME_SHORT_SLOW;
+            case ConfigProtos.Config.LoRaConfig.ModemPreset.MEDIUM_FAST_VALUE:
+                return TX_TIME_MEDIUM_FAST;
+            case ConfigProtos.Config.LoRaConfig.ModemPreset.MEDIUM_SLOW_VALUE:
+                return TX_TIME_MEDIUM_SLOW;
+            case ConfigProtos.Config.LoRaConfig.ModemPreset.LONG_MODERATE_VALUE:
+                return TX_TIME_LONG_MODERATE;
+            case ConfigProtos.Config.LoRaConfig.ModemPreset.LONG_FAST_VALUE:
+                return TX_TIME_LONG_FAST;
+            case ConfigProtos.Config.LoRaConfig.ModemPreset.LONG_SLOW_VALUE:
+                return TX_TIME_LONG_SLOW;
+            default:
+                Log.w(TAG, "Unknown modem preset " + modemPreset + ", using default timing");
+                return TX_TIME_DEFAULT;
+        }
+    }
+
+    /**
+     * Get inter-packet delay based on modem preset.
+     * Faster presets can use shorter delays between packets.
+     */
+    private static long getInterPacketDelay(int modemPreset) {
+        // Use 50% of TX time as inter-packet delay to respect duty cycle
+        // and allow mesh to process packets
+        return Math.max(50, getPerPacketTxTime(modemPreset) / 2);
+    }
+
+    /**
+     * Get adaptive ACK timeout based on number of blocks and modem preset.
+     * Accounts for TX time, mesh propagation, RX processing, and ACK return.
+     */
+    private static long getAdaptiveAckTimeout(int blocksToSend, int modemPreset) {
+        long perPacketTime = getPerPacketTxTime(modemPreset);
+
+        // Total time = base processing + (blocks * TX time) + ACK return time
+        // Multiply by 2 to account for multi-hop propagation delays
+        long txTime = blocksToSend * perPacketTime * 2;
+        long ackReturnTime = perPacketTime * 4;  // ACK travels back through mesh
+
+        long timeout = BASE_ACK_TIMEOUT_MS + txTime + ackReturnTime;
+
+        Log.d(TAG, "ACK timeout for " + blocksToSend + " blocks @ preset " + modemPreset +
+                  ": " + (timeout / 1000) + "s (per-pkt=" + perPacketTime + "ms)");
+
+        return Math.min(timeout, MAX_ACK_TIMEOUT_MS);
+    }
+
+    /**
+     * Legacy method for backward compatibility.
+     * @deprecated Use getAdaptiveAckTimeout(blocksToSend, modemPreset) instead
+     */
+    @Deprecated
+    private static long getAdaptiveAckTimeout(int blocksToSend) {
+        return getAdaptiveAckTimeout(blocksToSend, getCurrentModemPreset());
+    }
 
     private final FountainCodec codec;
     private final MeshServiceManager meshServiceManager;
@@ -128,11 +249,12 @@ public class FountainChunkManager {
         byte[] dataHash = FountainPacket.computeHash(dataWithType);
 
         int K = codec.getSourceBlockCount(dataWithType.length);
-        int blocksToSend = codec.getRecommendedBlockCount(dataWithType.length, DEFAULT_OVERHEAD);
+        double overhead = getAdaptiveOverhead(K);
+        int blocksToSend = codec.getRecommendedBlockCount(dataWithType.length, overhead);
 
         Log.d(TAG, "Starting fountain transfer " + transferId +
                   ": " + data.length + " bytes (type=" + transferType + "), K=" + K +
-                  ", sending " + blocksToSend + " blocks");
+                  ", overhead=" + (int)(overhead * 100) + "%, sending " + blocksToSend + " blocks");
 
         // Log data details for debugging
         Log.d(TAG, "Transfer " + transferId + " dataWithType hash: " + bytesToHex(dataHash));
@@ -149,9 +271,16 @@ public class FountainChunkManager {
     private void sendTransfer(SendState state, int blocksToSend) {
         int attempt = 0;
 
+        // Get modem preset once at start of transfer for consistent timing
+        int modemPreset = getCurrentModemPreset();
+        long interPacketDelay = getInterPacketDelay(modemPreset);
+
         while (attempt < MAX_RETRIES && !state.isComplete) {
             attempt++;
-            Log.d(TAG, "Transfer " + state.transferId + " attempt " + attempt);
+            long ackTimeout = getAdaptiveAckTimeout(blocksToSend, modemPreset);
+            Log.d(TAG, "Transfer " + state.transferId + " attempt " + attempt +
+                      ", sending " + blocksToSend + " blocks, inter-pkt=" + interPacketDelay +
+                      "ms, ACK timeout " + (ackTimeout / 1000) + "s");
 
             // Generate and send blocks
             List<FountainCodec.EncodedBlock> blocks = codec.encode(
@@ -176,19 +305,19 @@ public class FountainChunkManager {
                     callback.onProgress(state.transferId, i + 1, blocksToSend, true);
                 }
 
-                // Inter-packet delay to respect duty cycle
+                // Inter-packet delay based on modem preset to respect duty cycle
                 try {
-                    Thread.sleep(INTER_PACKET_DELAY_MS);
+                    Thread.sleep(interPacketDelay);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     return;
                 }
             }
 
-            // Wait for ACK
+            // Wait for ACK with adaptive timeout
             long waitStart = System.currentTimeMillis();
             while (!state.isComplete &&
-                   System.currentTimeMillis() - waitStart < ACK_TIMEOUT_MS) {
+                   System.currentTimeMillis() - waitStart < ackTimeout) {
                 try {
                     Thread.sleep(100);
                 } catch (InterruptedException e) {

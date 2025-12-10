@@ -68,6 +68,7 @@ public final class Constants {
     public static final String PREF_PLUGIN_CHANNEL = "plugin_meshtastic_channel";
     public static final String PREF_PLUGIN_FROM_SERVER = "plugin_meshtastic_from_server";
     public static final String PREF_PLUGIN_FILTER_BY_CHANNEL = "plugin_meshtastic_channel_filter";
+    public static final String PREF_PLUGIN_FILE_TRANSFER = "plugin_meshtastic_file_transfer";
     public static final String PREF_PLUGIN_LOCAL_NODE_ID = "plugin_meshtastic_local_node_id";
 
 

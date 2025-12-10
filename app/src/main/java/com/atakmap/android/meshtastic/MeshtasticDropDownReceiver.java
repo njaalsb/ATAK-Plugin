@@ -31,18 +31,15 @@ import com.atakmap.android.meshtastic.plugin.R;
 import com.atakmap.android.meshtastic.util.Constants;
 import com.atakmap.coremap.log.Log;
 import com.atakmap.coremap.filesystem.FileSystemUtils;
-import org.meshtastic.proto.ATAKProtos;
 import org.meshtastic.proto.AppOnlyProtos;
 import org.meshtastic.proto.ConfigProtos;
 import org.meshtastic.core.model.DataPacket;
 import org.meshtastic.proto.LocalOnlyProtos;
-import org.meshtastic.proto.MeshProtos;
 import org.meshtastic.core.model.MessageStatus;
 import org.meshtastic.core.model.DeviceMetrics;
 import org.meshtastic.core.model.MyNodeInfo;
 import org.meshtastic.core.model.NodeInfo;
 import org.meshtastic.proto.Portnums;
-import com.google.protobuf.ByteString;
 import com.ustadmobile.codec2.Codec2;
 
 import org.vosk.Model;
@@ -873,28 +870,13 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements
         tv.setText("Sending: " + converted);
         //t1.speak(converted, TextToSpeech.QUEUE_FLUSH, null);
 
-        ATAKProtos.Contact.Builder contact = ATAKProtos.Contact.newBuilder();
-        contact.setCallsign(mapView.getDeviceCallsign());
-        contact.setDeviceCallsign(mapView.getSelfMarker().getUID());
-
-        ATAKProtos.GeoChat.Builder geochat = ATAKProtos.GeoChat.newBuilder();
-        geochat.setMessage(converted);
-        geochat.setTo("All Chat Rooms");
-
-        ATAKProtos.TAKPacket.Builder tak_packet = ATAKProtos.TAKPacket.newBuilder();
-        tak_packet.setContact(contact);
-        tak_packet.setChat(geochat);
-
-        Log.d(TAG, "Total wire size for TAKPacket: " + tak_packet.build().toByteArray().length);
-        Log.d(TAG, "Sending: " + tak_packet.build().toString());
-
-        ByteString payload = ByteString.copyFrom(converted.getBytes());
-
         hopLimit = MeshtasticReceiver.getHopLimit();
         channel = MeshtasticReceiver.getChannelIndex();
 
-        DataPacket dp = new DataPacket(DataPacket.ID_BROADCAST, MeshProtos.Data.newBuilder().setPayload(payload).build().toByteArray(),Portnums.PortNum.TEXT_MESSAGE_APP_VALUE, DataPacket.ID_LOCAL, System.currentTimeMillis(), 0, MessageStatus.UNKNOWN, hopLimit, channel, MeshtasticReceiver.getWantsAck(), 0, 0f, 0, null, null, 0, false);
+        // Send as TEXT_MESSAGE_APP for interoperability with Meshtastic Android app chat
+        DataPacket dp = new DataPacket(DataPacket.ID_BROADCAST, converted.getBytes(), Portnums.PortNum.TEXT_MESSAGE_APP_VALUE, DataPacket.ID_LOCAL, System.currentTimeMillis(), 0, MessageStatus.UNKNOWN, hopLimit, channel, MeshtasticReceiver.getWantsAck(), 0, 0f, 0, null, null, 0, false);
         MeshtasticMapComponent.sendToMesh(dp);
+        Log.d(TAG, "Voice Memo sent as TEXT_MESSAGE_APP: " + converted);
     }
 
     public static String convertTextualNumbersInDocument(String inputText) {

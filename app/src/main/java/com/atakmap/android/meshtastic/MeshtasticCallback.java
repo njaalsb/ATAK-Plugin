@@ -37,6 +37,13 @@ public class MeshtasticCallback implements SaveAndSendCallback {
         SharedPreferences.Editor editor = prefs.edit();
 
         if (FileSystemUtils.isFile(file)) {
+            // Check if file transfer is enabled in preferences
+            if (!prefs.getBoolean(Constants.PREF_PLUGIN_FILE_TRANSFER, false)) {
+                showToast("File transfer is disabled.\nEnable in Meshtastic plugin settings.");
+                Log.w(TAG, "File transfer blocked - disabled in preferences");
+                return;
+            }
+
             // check file size
             if (FileSystemUtils.getFileSize(file) > 1024 * 56) {
                 showToast("File is too large to send, 56KB Max");

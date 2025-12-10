@@ -115,6 +115,11 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
     private final MeshtasticExternalGPS meshtasticExternalGPS;
     // Fountain code chunk manager for large transfers
     private final FountainChunkManager fountainChunkManager;
+    // Lookup tables: Meshtastic node ID -> ATAK info (populated from PLI/GeoChat TAKPackets)
+    private static final java.util.concurrent.ConcurrentHashMap<String, String> nodeIdToCallsign =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<String, String> nodeIdToDeviceUid =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     public MeshtasticReceiver(MeshtasticExternalGPS meshtasticExternalGPS, FountainChunkManager fountainChunkManager) {
         this.meshtasticExternalGPS = meshtasticExternalGPS;
@@ -257,6 +262,21 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
                 Log.d(TAG, "Got a meshtastic text message");
                 DataPacket payload = intent.getParcelableExtra(Constants.EXTRA_PAYLOAD);
                 if (payload == null) return;
+
+                // Apply channel filter if enabled
+                if (prefs.getBoolean(Constants.PREF_PLUGIN_FILTER_BY_CHANNEL, false)) {
+                    int preferredChannel;
+                    try {
+                        preferredChannel = Integer.parseInt(prefs.getString(Constants.PREF_PLUGIN_CHANNEL, "0"));
+                    } catch (NumberFormatException e) {
+                        preferredChannel = 0;
+                    }
+                    int packetChannel = payload.getChannel();
+                    if (packetChannel != preferredChannel) {
+                        Log.d(TAG, "Ignoring text message on channel " + packetChannel + ", preferred: " + preferredChannel);
+                        return;
+                    }
+                }
                 String message = new String(payload.getBytes());
                 Log.d(TAG, "Message: " + message);
                 Log.d(TAG, payload.toString());
@@ -275,13 +295,20 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
 
                 if (payload.getTo().equals("^all")) {
                     Log.d(TAG, "Sending CoT for Text Message");
+                    // Look up sender's ATAK info from lookup table (populated from PLI/GeoChat)
+                    String senderNodeId = payload.getFrom();
+                    String senderCallsign = getNodeLongName(senderNodeId);
+                    // Use ATAK device UID if known, otherwise fall back to node ID
+                    String senderUid = nodeIdToDeviceUid.getOrDefault(senderNodeId, senderNodeId);
+                    Log.d(TAG, "Sender: " + senderNodeId + " -> callsign=" + senderCallsign + ", uid=" + senderUid);
+
                     CotEvent cotEvent = new CotEvent();
                     CoordinatedTime time = new CoordinatedTime();
                     cotEvent.setTime(time);
                     cotEvent.setStart(time);
                     cotEvent.setStale(time.addMinutes(10));
 
-                    cotEvent.setUID("GeoChat." + payload.getFrom() + ".All Chat Rooms." + UUID.randomUUID());
+                    cotEvent.setUID("GeoChat." + senderUid + ".All Chat Rooms." + UUID.randomUUID());
                     CotPoint gp = new CotPoint(0, 0, 0, 0, 0);
                     cotEvent.setPoint(gp);
                     cotEvent.setHow("m-g");
@@ -296,17 +323,17 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
                     chatDetail.setAttribute("messageId", UUID.randomUUID().toString());
                     chatDetail.setAttribute("chatroom", "All Chat Rooms");
                     chatDetail.setAttribute("id", "All Chat Rooms");
-                    chatDetail.setAttribute("senderCallsign", payload.getFrom());
+                    chatDetail.setAttribute("senderCallsign", senderCallsign);
                     cotDetail.addChild(chatDetail);
 
                     CotDetail chatgrp = new CotDetail("chatgrp");
-                    chatgrp.setAttribute("uid0", payload.getFrom());
+                    chatgrp.setAttribute("uid0", senderUid);
                     chatgrp.setAttribute("uid1", "All Chat Rooms");
                     chatgrp.setAttribute("id", "All Chat Rooms");
                     chatDetail.addChild(chatgrp);
 
                     CotDetail linkDetail = new CotDetail("link");
-                    linkDetail.setAttribute("uid", payload.getFrom());
+                    linkDetail.setAttribute("uid", senderUid);
                     linkDetail.setAttribute("type", "a-f-G-U-C");
                     linkDetail.setAttribute("relation", "p-p");
                     cotDetail.addChild(linkDetail);
@@ -316,7 +343,7 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
                     cotDetail.addChild(serverDestinationDetail);
 
                     CotDetail remarksDetail = new CotDetail("remarks");
-                    remarksDetail.setAttribute("source", "BAO.F.ATAK." + payload.getFrom());
+                    remarksDetail.setAttribute("source", "BAO.F.ATAK." + senderUid);
                     remarksDetail.setAttribute("to", "All Chat Rooms");
                     remarksDetail.setAttribute("time", time.toString());
                     remarksDetail.setInnerText(new String(payload.getBytes()));
@@ -335,13 +362,20 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
 
                 if (myNodeID.equals(payload.getTo())) {
                     Log.d(TAG, "Sending CoT for DM Text Message");
+                    // Look up sender's ATAK info from lookup table (populated from PLI/GeoChat)
+                    String senderNodeId = payload.getFrom();
+                    String senderCallsign = getNodeLongName(senderNodeId);
+                    // Use ATAK device UID if known, otherwise fall back to node ID
+                    String senderUid = nodeIdToDeviceUid.getOrDefault(senderNodeId, senderNodeId);
+                    Log.d(TAG, "DM Sender: " + senderNodeId + " -> callsign=" + senderCallsign + ", uid=" + senderUid);
+
                     CotEvent cotEvent = new CotEvent();
                     CoordinatedTime time = new CoordinatedTime();
                     cotEvent.setTime(time);
                     cotEvent.setStart(time);
                     cotEvent.setStale(time.addMinutes(10));
 
-                    cotEvent.setUID("GeoChat." + payload.getFrom() + "." + myNodeID + "." + UUID.randomUUID());
+                    cotEvent.setUID("GeoChat." + senderUid + "." + myNodeID + "." + UUID.randomUUID());
                     CotPoint gp = new CotPoint(0, 0, 0, 0, 0);
                     cotEvent.setPoint(gp);
                     cotEvent.setHow("m-g");
@@ -356,17 +390,17 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
                     chatDetail.setAttribute("messageId", UUID.randomUUID().toString());
                     chatDetail.setAttribute("chatroom", myNodeID);
                     chatDetail.setAttribute("id", myNodeID);
-                    chatDetail.setAttribute("senderCallsign", payload.getFrom());
+                    chatDetail.setAttribute("senderCallsign", senderCallsign);
                     cotDetail.addChild(chatDetail);
 
                     CotDetail chatgrp = new CotDetail("chatgrp");
-                    chatgrp.setAttribute("uid0", payload.getFrom());
+                    chatgrp.setAttribute("uid0", senderUid);
                     chatgrp.setAttribute("uid1", myNodeID);
                     chatgrp.setAttribute("id", myNodeID);
                     chatDetail.addChild(chatgrp);
 
                     CotDetail linkDetail = new CotDetail("link");
-                    linkDetail.setAttribute("uid", payload.getFrom());
+                    linkDetail.setAttribute("uid", senderUid);
                     linkDetail.setAttribute("type", "a-f-G-U-C");
                     linkDetail.setAttribute("relation", "p-p");
                     cotDetail.addChild(linkDetail);
@@ -376,7 +410,7 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
                     cotDetail.addChild(serverDestinationDetail);
 
                     CotDetail remarksDetail = new CotDetail("remarks");
-                    remarksDetail.setAttribute("source", "BAO.F.ATAK." + payload.getFrom());
+                    remarksDetail.setAttribute("source", "BAO.F.ATAK." + senderUid);
                     remarksDetail.setAttribute("to", myNodeID);
                     remarksDetail.setAttribute("time", time.toString());
                     remarksDetail.setInnerText(new String(payload.getBytes()));
@@ -701,6 +735,21 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
         int dataType = payload.getDataType();
         Log.v(TAG, "handleReceive(), dataType: " + dataType + " size: " + payload.getBytes().length);
 
+        // Apply channel filter if enabled
+        if (prefs.getBoolean(Constants.PREF_PLUGIN_FILTER_BY_CHANNEL, false)) {
+            int preferredChannel;
+            try {
+                preferredChannel = Integer.parseInt(prefs.getString(Constants.PREF_PLUGIN_CHANNEL, "0"));
+            } catch (NumberFormatException e) {
+                preferredChannel = 0;
+            }
+            int packetChannel = payload.getChannel();
+            if (packetChannel != preferredChannel) {
+                Log.d(TAG, "Ignoring packet on channel " + packetChannel + ", preferred: " + preferredChannel);
+                return;
+            }
+        }
+
         SharedPreferences.Editor editor = prefs.edit();
 
         if (dataType == Portnums.PortNum.ATAK_FORWARDER_VALUE) {
@@ -774,11 +823,11 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
 
             try {
                 ATAKProtos.TAKPacket tp = ATAKProtos.TAKPacket.parseFrom(payload.getBytes());
-                //if (tp.getIsCompressed()) {
-                //    Log.d(TAG, "TAK_PACKET is compressed");
-                //    return;
-                //}
-                //Log.d(TAG, "TAK_PACKET: " + tp.toString());
+                if (tp.getIsCompressed()) {
+                    Log.d(TAG, "TAK_PACKET is compressed");
+                    return;
+                }
+                Log.d(TAG, "TAK_PACKET: " + tp.toString());
                 if (tp.hasPli()) {
                     Log.d(TAG, "TAK_PACKET PLI");
                     ATAKProtos.Contact contact = tp.getContact();
@@ -796,6 +845,18 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
 
                     String callsign = contact.getCallsign();
                     String deviceCallsign = contact.getDeviceCallsign();
+
+                    // Store nodeId -> ATAK info mapping for TEXT_MESSAGE_APP sender lookup
+                    String senderNodeId = payload.getFrom();
+                    if (senderNodeId != null && callsign != null && !callsign.isEmpty()) {
+                        String prevCallsign = nodeIdToCallsign.put(senderNodeId, callsign);
+                        if (prevCallsign == null || !prevCallsign.equals(callsign)) {
+                            Log.d(TAG, "Stored nodeId->callsign mapping: " + senderNodeId + " -> " + callsign);
+                        }
+                        if (deviceCallsign != null && !deviceCallsign.isEmpty()) {
+                            nodeIdToDeviceUid.put(senderNodeId, deviceCallsign);
+                        }
+                    }
 
                     CotDetail cotDetail = new CotDetail("detail");
 
@@ -943,21 +1004,6 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
                     } else
                         Log.e(TAG, "cotEvent was not valid");
 
-
-              /*
-            <?xml version='1.0' encoding='UTF-8' standalone='yes'?>
-            <event version='2.0' uid='GeoChat.ANDROID-e612f0e922b56a63.All Chat Rooms.d22bcfac-2c28-4e0c-8133-172928ba59b7' type='b-t-f' time='2024-02-07T19:02:09.192Z' start='2024-02-07T19:02:09.192Z' stale='2024-02-08T19:02:09.192Z' how='h-g-i-g-o'>
-            <point lat='40.2392345' lon='-19.7690137' hae='9999999.0' ce='9999999.0' le='9999999.0' />
-                <detail>
-                    <__chat parent='RootContactGroup' groupOwner='false' messageId='d22bcfac-2c28-4e0c-8133-172928ba59b7' chatroom='All Chat Rooms' id='All Chat Rooms' senderCallsign='FALKE lol'>
-                        <chatgrp uid0='ANDROID-e612f0e922b56a63' uid1='All Chat Rooms' id='All Chat Rooms'/>
-                    </__chat>
-                    <link uid='ANDROID-e612f0e922b56a63' type='a-f-G-U-C' relation='p-p'/>
-                    <__serverdestination destinations='0.0.0.0:4242:tcp:ANDROID-e612f0e922b56a63'/>
-                    <remarks source='BAO.F.ATAK.ANDROID-e612f0e922b56a63' to='All Chat Rooms' time='2024-02-07T19:02:09.192Z'>lol</remarks>
-                </detail>
-            </event>
-             */
                 } else if (tp.hasChat() && tp.getChat().getTo().equals("All Chat Rooms")) {
                     Log.d(TAG, "TAK_PACKET GEOCHAT - All Chat Rooms");
 
@@ -967,6 +1013,15 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
                     String callsign = contact.getCallsign();
                     String deviceCallsign = contact.getDeviceCallsign();
                     String msgId = callsign + "-" + deviceCallsign + "-" + geoChat.getMessage().hashCode() + "-" + System.currentTimeMillis();
+
+                    // Store nodeId -> ATAK info mapping for TEXT_MESSAGE_APP sender lookup
+                    String senderNodeId = payload.getFrom();
+                    if (senderNodeId != null && callsign != null && !callsign.isEmpty()) {
+                        nodeIdToCallsign.putIfAbsent(senderNodeId, callsign);
+                        if (deviceCallsign != null && !deviceCallsign.isEmpty()) {
+                            nodeIdToDeviceUid.putIfAbsent(senderNodeId, deviceCallsign);
+                        }
+                    }
 
                     //Bundle chatMessage = ChatDatabase.getInstance(_mapView.getContext()).getChatMessage(msgId);
                     //if (chatMessage != null) {
@@ -1044,21 +1099,6 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
                         Log.e(TAG, "cotEvent was not valid");
 
                 } else if (tp.hasChat() && tp.getChat().getTo().equals(getMapView().getSelfMarker().getUID())) {
-                    /*
-                    <?xml version='1.0' encoding='UTF-8' standalone='yes'?>
-                    <event version='2.0' uid='GeoChat.ANDROID-e612f0e922b56a63.ANDROID-b5c2b8340a0a2cd5.23c1f487-7111-4995-89f5-7709a9c99518' type='b-t-f' time='2024-02-07T19:04:06.683Z' start='2024-02-07T19:04:06.683Z' stale='2024-02-08T19:04:06.683Z' how='h-g-i-g-o'>
-                    <point lat='40.2392345' lon='-19.7690137' hae='9999999.0' ce='9999999.0' le='9999999.0' />
-                    <detail>
-                        <__chat parent='RootContactGroup' groupOwner='false' messageId='23c1f487-7111-4995-89f5-7709a9c99518' chatroom='HUSKER lol' id='ANDROID-b5c2b8340a0a2cd5' senderCallsign='FALKE lol'>
-                            <chatgrp uid0='ANDROID-e612f0e922b56a63' uid1='ANDROID-b5c2b8340a0a2cd5' id='ANDROID-b5c2b8340a0a2cd5'/>
-                        </__chat>
-                        <link uid='ANDROID-e612f0e922b56a63' type='a-f-G-U-C' relation='p-p'/>
-                        <__serverdestination destinations='0.0.0.0:4242:tcp:ANDROID-e612f0e922b56a63'/>
-                        <remarks source='BAO.F.ATAK.ANDROID-e612f0e922b56a63' to='ANDROID-b5c2b8340a0a2cd5' time='2024-02-07T19:04:06.683Z'>at breach</remarks>
-                    </detail>
-                    </event>
-                     */
-
                     Log.d(TAG, "TAK_PACKET GEOCHAT - DM");
 
                     ATAKProtos.Contact contact = tp.getContact();
@@ -1068,6 +1108,15 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
                     String callsign = contact.getCallsign();
                     String deviceCallsign = contact.getDeviceCallsign();
                     String msgId = callsign + "-" + deviceCallsign + "-" + geoChat.getMessage().hashCode() + "-" + System.currentTimeMillis();
+
+                    // Store nodeId -> ATAK info mapping for TEXT_MESSAGE_APP sender lookup
+                    String senderNodeId = payload.getFrom();
+                    if (senderNodeId != null && callsign != null && !callsign.isEmpty()) {
+                        nodeIdToCallsign.putIfAbsent(senderNodeId, callsign);
+                        if (deviceCallsign != null && !deviceCallsign.isEmpty()) {
+                            nodeIdToDeviceUid.putIfAbsent(senderNodeId, deviceCallsign);
+                        }
+                    }
 
                     //Bundle chatMessage = ChatDatabase.getInstance(_mapView.getContext()).getChatMessage(msgId);
                     //if (chatMessage != null) {
@@ -1502,6 +1551,48 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
             sb.append(String.format("%02X", b));
         }
         return sb.toString();
+    }
+
+    /**
+     * Look up a sender's callsign by their Meshtastic node ID (e.g., "!12345abc").
+     *
+     * Priority order:
+     * 1. ATAK callsign from lookup table (populated when receiving PLI/GeoChat TAKPackets)
+     * 2. Meshtastic node's configured long name
+     * 3. Raw node ID as fallback
+     *
+     * @param nodeId The Meshtastic node ID (e.g., "!12345abc")
+     * @return The sender's callsign/name, or the node ID if not found
+     */
+    private static String getNodeLongName(String nodeId) {
+        if (nodeId == null) return "Unknown";
+
+        // First, check if we have an ATAK callsign from a previous TAKPacket
+        String atakCallsign = nodeIdToCallsign.get(nodeId);
+        if (atakCallsign != null && !atakCallsign.isEmpty()) {
+            return atakCallsign;
+        }
+
+        // Fall back to Meshtastic node's long name
+        try {
+            List<NodeInfo> nodes = MeshtasticMapComponent.getNodes();
+            if (nodes != null) {
+                for (NodeInfo node : nodes) {
+                    if (node.getUser() != null && nodeId.equals(node.getUser().getId())) {
+                        String longName = node.getUser().getLongName();
+                        if (longName != null && !longName.isEmpty()) {
+                            return longName;
+                        }
+                        break;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to look up node name for " + nodeId, e);
+        }
+
+        // Fallback to node ID
+        return nodeId;
     }
 
     /**
