@@ -284,7 +284,7 @@ public class MeshtasticMapComponent extends DropDownMapComponent
         } else if (uid.contains("All Chat Rooms")) {
             // All Chat Rooms message
             handleAllChatMessage(parsedData, hopLimit, channel);
-        } else if (type.equalsIgnoreCase("b-t-f-p")) {
+        } else if (type.equalsIgnoreCase("b-t-f")) {
             // Direct message chat (pending)
             handleDirectMessage(parsedData, hopLimit, channel);
         } else if (type.equalsIgnoreCase("b-t-f-d") || type.equalsIgnoreCase("b-t-f-r")) {
@@ -439,10 +439,14 @@ public class MeshtasticMapComponent extends DropDownMapComponent
             return;
         }
 
-        // Get the messageId from __chat detail
-        CotDetail chatDetail = cotDetail.getFirstChildByName(0, "__chat");
+        // Get the messageId from __chatreceipt detail (receipts use __chatreceipt, not __chat)
+        CotDetail chatDetail = cotDetail.getFirstChildByName(0, "__chatreceipt");
         if (chatDetail == null) {
-            Log.w(TAG, "Chat receipt has no __chat detail, skipping");
+            // Fall back to __chat in case format varies
+            chatDetail = cotDetail.getFirstChildByName(0, "__chat");
+        }
+        if (chatDetail == null) {
+            Log.w(TAG, "Chat receipt has no __chatreceipt or __chat detail, skipping");
             return;
         }
 
@@ -452,20 +456,21 @@ public class MeshtasticMapComponent extends DropDownMapComponent
             return;
         }
 
-        // Get recipient (who we're sending the receipt to)
-        String to = chatDetail.getAttribute("chatroom");
-        if (to == null || to.isEmpty()) {
-            // Try to get from chatgrp
-            CotDetail chatgrp = chatDetail.getFirstChildByName(0, "chatgrp");
-            if (chatgrp != null) {
-                to = chatgrp.getAttribute("uid1");
-            }
+        // Get recipient (who we're sending the receipt to - the original message sender)
+        // In chatgrp: uid0 = original sender, uid1 = original recipient (me)
+        // The receipt goes back to uid0 (the original sender)
+        String to = null;
+        CotDetail chatgrp = chatDetail.getFirstChildByName(0, "chatgrp");
+        if (chatgrp != null) {
+            to = chatgrp.getAttribute("uid0");  // Original sender receives the receipt
         }
 
         if (to == null || to.isEmpty()) {
-            Log.w(TAG, "Chat receipt has no recipient, skipping");
+            Log.w(TAG, "Chat receipt has no recipient (uid0), skipping");
             return;
         }
+
+        Log.d(TAG, "Sending receipt to original sender: " + to);
 
         // Build receipt message: "ACK:D:<messageId>" or "ACK:R:<messageId>"
         String receiptType = type.equalsIgnoreCase("b-t-f-d") ? "D" : "R";

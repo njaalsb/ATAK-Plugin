@@ -177,35 +177,23 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
             fountainChunkManager.setCallback(new FountainChunkManager.TransferCallback() {
                 // Track if we've shown a notification for this transfer (for >5 block transfers)
                 private int activeReceiveTransferId = -1;
-                // Track total blocks for determining small vs large transfer
-                private int lastKnownTotal = 0;
 
                 @Override
                 public void onTransferComplete(int transferId, byte[] data, String senderNodeId, byte transferType) {
                     if (data == null) {
                         // This is a send completion, not receive
                         Log.d(TAG, "Fountain send transfer " + transferId + " completed");
-                        // Reset widget to green after send completes
-                        resetWidgetToGreen();
                         return;
                     }
                     Log.d(TAG, "Fountain receive transfer " + transferId + " completed, " +
                               data.length + " bytes from " + senderNodeId + ", type=" + transferType);
 
-                    // Reset widget to green
-                    resetWidgetToGreen();
-
-                    // Show completion notification/toast based on transfer size
+                    // Show completion notification if we had progress notification
                     if (activeReceiveTransferId == transferId) {
-                        // Large transfer (>5 blocks) - use notification
                         NotificationHelper.getInstance(MapView.getMapView().getContext())
                             .showReceiveCompletionNotification();
                         activeReceiveTransferId = -1;
-                    } else if (lastKnownTotal > 0 && lastKnownTotal <= 5) {
-                        // Small transfer (<=5 blocks) - use toast
-                        showToast("Meshtastic: Data received successfully");
                     }
-                    lastKnownTotal = 0;
 
                     processFountainData(data, senderNodeId, transferType);
                 }
@@ -214,20 +202,18 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
                 public void onTransferFailed(int transferId, String reason) {
                     Log.e(TAG, "Fountain transfer " + transferId + " failed: " + reason);
 
-                    // Reset widget to green
-                    resetWidgetToGreen();
-
-                    // Show failure notification/toast based on transfer size
+                    // Show failure notification/toast
                     if (activeReceiveTransferId == transferId) {
-                        // Large transfer (>5 blocks) - use notification
                         NotificationHelper.getInstance(MapView.getMapView().getContext())
                             .showReceiveFailedNotification(reason);
                         activeReceiveTransferId = -1;
-                    } else if (lastKnownTotal > 0 && lastKnownTotal <= 5) {
-                        // Small transfer (<=5 blocks) - use toast
-                        showToast("Meshtastic: Transfer failed - " + reason);
+                    } else {
+                        // Show toast for failures
+                        MapView.getMapView().post(() ->
+                            Toast.makeText(MapView.getMapView().getContext(),
+                                "Meshtastic: Transfer failed - " + reason, Toast.LENGTH_SHORT).show()
+                        );
                     }
-                    lastKnownTotal = 0;
                 }
 
                 @Override
@@ -235,38 +221,12 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
                     Log.v(TAG, "Fountain transfer " + transferId + ": " + received + "/" + total +
                               (isSending ? " (sending)" : " (receiving)"));
 
-                    // Track total for completion/failure handling
-                    if (!isSending) {
-                        lastKnownTotal = total;
-                    }
-
-                    // Update widget to blue to indicate active transfer
-                    MapView.getMapView().post(() -> {
-                        if (MeshtasticMapComponent.mw != null) {
-                            MeshtasticMapComponent.mw.setIcon("blue");
-                        }
-                    });
-
                     // For receiving transfers with >5 blocks, show notification with progress
                     if (!isSending && total > 5) {
                         activeReceiveTransferId = transferId;
                         NotificationHelper.getInstance(MapView.getMapView().getContext())
                             .showReceiveProgressNotification(received, total);
                     }
-                }
-
-                private void resetWidgetToGreen() {
-                    MapView.getMapView().post(() -> {
-                        if (MeshtasticMapComponent.mw != null) {
-                            MeshtasticMapComponent.mw.setIcon("green");
-                        }
-                    });
-                }
-
-                private void showToast(String message) {
-                    MapView.getMapView().post(() ->
-                        Toast.makeText(MapView.getMapView().getContext(), message, Toast.LENGTH_SHORT).show()
-                    );
                 }
             });
         }

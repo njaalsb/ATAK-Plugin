@@ -428,6 +428,11 @@ public class FountainChunkManager {
             dataBlock.payload
         );
 
+        // Check if transfer already completed (we keep state briefly for duplicate ACKs)
+        if (state.isComplete) {
+            return;  // Already completed, ignore late packets
+        }
+
         // Check for duplicate
         if (state.hasBlock(dataBlock.seed)) {
             return;  // Already have this block
@@ -472,6 +477,9 @@ public class FountainChunkManager {
                 state.dataHash = hash;
 
                 Log.d(TAG, "Transfer " + transferId + " computed hash: " + bytesToHex(hash));
+
+                // Mark as complete to prevent further callbacks from late packets
+                state.isComplete = true;
 
                 // Send COMPLETE ACK (twice for redundancy)
                 sendAck(transferId, FountainPacket.TYPE_COMPLETE,
@@ -623,6 +631,7 @@ public class FountainChunkManager {
         long lastActivityTime;
         byte[] decodedData;
         byte[] dataHash;
+        boolean isComplete;  // Flag to prevent multiple completions
 
         ReceiveState(int transferId, int K, int totalLength, String senderNodeId,
                     int channel, int hopLimit) {
@@ -635,6 +644,7 @@ public class FountainChunkManager {
             this.blocks = new ArrayList<>();
             this.receivedSeeds = new java.util.HashSet<>();
             this.lastActivityTime = System.currentTimeMillis();
+            this.isComplete = false;
         }
 
         boolean hasBlock(int seed) {
