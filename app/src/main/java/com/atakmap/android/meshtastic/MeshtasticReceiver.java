@@ -988,80 +988,6 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
                         team = "Dark Green";
                     groupDetail.setAttribute("name", team);
 
-
-            try {
-                    NodeInfo ni = intent.getParcelableExtra("com.geeksville.mesh.NodeInfo");
-                    Log.d(TAG, "NodeInfo: " + ni);
-                       String nodeName = "";
-                        String[] teamColor = {"Unknown", " -0"};
-                        if (ni != null) {
-                            nodeName = ni.getUser().getLongName();
-                            teamColor = nodeName.split("((?= -[0-9]*$))");
-                            Log.d(TAG, String.valueOf(teamColor.length));
-
-                            for (int i = 0; i < teamColor.length; i++) {
-                                Log.d(TAG, "teamColor[" + i + "]: " + teamColor[i]);
-                            }
-                            if (teamColor.length < 2) {
-                                teamColor = new String[]{nodeName, " -10"};
-                            }
-                            groupDetail.setAttribute("role", "Team Member");
-                            switch (teamColor[1]) {
-                                case " -0":
-                                case " -1":
-                                    groupDetail.setAttribute("name", "White");
-                                    break;
-                                case " -2":
-                                    groupDetail.setAttribute("name", "Yellow");
-                                    break;
-                                case " -3":
-                                    groupDetail.setAttribute("name", "Orange");
-                                    break;
-                                case " -4":
-                                    groupDetail.setAttribute("name", "Magenta");
-                                    break;
-                                case " -5":
-                                    groupDetail.setAttribute("name", "Red");
-                                    break;
-                                case " -6":
-                                    groupDetail.setAttribute("name", "Maroon");
-                                    break;
-                                case " -7":
-                                    groupDetail.setAttribute("name", "Purple");
-                                    break;
-                                case " -8":
-                                    groupDetail.setAttribute("name", "Dark Blue");
-                                    break;
-                                case " -9":
-                                    groupDetail.setAttribute("name", "Blue");
-                                    break;
-                                case " -10":
-                                    groupDetail.setAttribute("name", "Cyan");
-                                    break;
-                                case " -11":
-                                    groupDetail.setAttribute("name", "Teal");
-                                    break;
-                                case " -12":
-                                    groupDetail.setAttribute("name", "Green");
-                                    break;
-                                case " -13":
-                                    groupDetail.setAttribute("name", "Dark Green");
-                                    break;
-                                case " -14":
-                                    groupDetail.setAttribute("name", "Brown");
-                                    break;
-                                default:
-                                    groupDetail.setAttribute("name", "Black");
-                                    break;
-                            }
-                        } else {
-                            groupDetail.setAttribute("name", "Cyan");
-                        }
-                    } catch(Exception e){
-                        e.printStackTrace();
-                        return;
-                    }
-
                     cotDetail.addChild(groupDetail);
 
                     CotDetail statusDetail = new CotDetail("status");
@@ -1343,6 +1269,19 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
             e.printStackTrace();
             return 0;
         }
+    }
+
+    /**
+     * Look up Meshtastic node ID for an ATAK device UID (reverse lookup).
+     */
+    public static String getNodeIdForDeviceUid(String deviceUid) {
+        if (deviceUid == null) return null;
+        for (java.util.Map.Entry<String, String> entry : nodeIdToDeviceUid.entrySet()) {
+            if (deviceUid.equals(entry.getValue())) {
+                return entry.getKey();
+            }
+        }
+        return null;
     }
 
     @Override
@@ -1761,8 +1700,8 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
 
         CotDetail cotDetail = new CotDetail("detail");
 
-        // __chat detail with messageId
-        CotDetail chatDetail = new CotDetail("__chat");
+        // __chatreceipt detail with messageId (receipts use __chatreceipt, not __chat)
+        CotDetail chatDetail = new CotDetail("__chatreceipt");
         chatDetail.setAttribute("messageId", messageId);
         chatDetail.setAttribute("parent", "RootContactGroup");
         chatDetail.setAttribute("groupOwner", "false");

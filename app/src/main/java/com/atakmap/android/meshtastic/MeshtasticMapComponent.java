@@ -469,20 +469,27 @@ public class MeshtasticMapComponent extends DropDownMapComponent
         }
 
         // Get recipient (who we're sending the receipt to - the original message sender)
-        // In chatgrp: uid0 = original sender, uid1 = original recipient (me)
-        // The receipt goes back to uid0 (the original sender)
+        // In chatgrp for receipts: uid0 = me (receipt sender), uid1 = original message sender (receipt recipient)
+        // The receipt goes to uid1 (the person who sent the original message)
         String to = null;
         CotDetail chatgrp = chatDetail.getFirstChildByName(0, "chatgrp");
         if (chatgrp != null) {
-            to = chatgrp.getAttribute("uid0");  // Original sender receives the receipt
+            to = chatgrp.getAttribute("uid1");  // Original message sender receives the receipt
         }
 
         if (to == null || to.isEmpty()) {
-            Log.w(TAG, "Chat receipt has no recipient (uid0), skipping");
+            Log.w(TAG, "Chat receipt has no recipient (uid1), skipping");
             return;
         }
 
-        Log.d(TAG, "Sending receipt to original sender: " + to);
+        // Look up Meshtastic node ID for the ATAK device UID
+        String targetNodeId = MeshtasticReceiver.getNodeIdForDeviceUid(to);
+        if (targetNodeId == null) {
+            Log.w(TAG, "No Meshtastic node ID found for ATAK UID: " + to + ", using broadcast");
+            targetNodeId = DataPacket.ID_BROADCAST;
+        }
+
+        Log.d(TAG, "Sending receipt to original sender: " + to + " (node: " + targetNodeId + ")");
 
         // Build receipt message: "ACK:D:<messageId>" or "ACK:R:<messageId>"
         String receiptType = type.equalsIgnoreCase("b-t-f-d") ? "D" : "R";
@@ -509,7 +516,7 @@ public class MeshtasticMapComponent extends DropDownMapComponent
         Log.d(TAG, "Chat receipt TAKPacket size: " + takPacket.toByteArray().length + " bytes");
 
         DataPacket dp = new DataPacket(
-            DataPacket.ID_BROADCAST,
+            targetNodeId,  // Send to specific node if known, otherwise broadcast
             takPacket.toByteArray(),
             Portnums.PortNum.ATAK_PLUGIN_VALUE,
             DataPacket.ID_LOCAL,
