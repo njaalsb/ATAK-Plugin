@@ -31,6 +31,8 @@ The plugin has been refactored for better maintainability and performance:
 3. Download the latest Meshtastic ATAK Plugin APK from [Releases](https://github.com/meshtastic/ATAK-Plugin/releases)
 4. Install the plugin APK on your Android device
 5. Launch ATAK and load the Meshtastic plugin from the plugins menu
+<img width="1080" height="2400" alt="image" src="https://github.com/user-attachments/assets/5f58a101-7293-476d-94a1-0e98925f2402" />
+
 
 ## Configuration
 
