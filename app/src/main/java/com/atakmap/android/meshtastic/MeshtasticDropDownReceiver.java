@@ -737,8 +737,11 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements
      */
     private void updateMetricsDisplay() {
         try {
+            Log.d(TAG, "updateMetricsDisplay: fetching node info...");
             MyNodeInfo myInfo = MeshtasticMapComponent.getMyNodeInfo();
             List<NodeInfo> nodes = MeshtasticMapComponent.getNodes();
+
+            Log.d(TAG, "updateMetricsDisplay: myInfo=" + myInfo + ", nodes=" + (nodes != null ? nodes.size() : "null"));
 
             if (myInfo == null) {
                 metricsNodeName.setText("Not connected");
@@ -754,6 +757,11 @@ public class MeshtasticDropDownReceiver extends DropDownReceiver implements
             }
 
             // Basic info from MyNodeInfo
+            Log.d(TAG, "updateMetricsDisplay: myNodeNum=" + myInfo.getMyNodeNum() +
+                  ", model=" + myInfo.getModel() +
+                  ", firmware=" + myInfo.getFirmwareVersion() +
+                  ", chUtil=" + myInfo.getChannelUtilization() +
+                  ", airTx=" + myInfo.getAirUtilTx());
             metricsModel.setText(myInfo.getModel() != null ? myInfo.getModel() : "--");
             metricsFirmware.setText(myInfo.getFirmwareVersion() != null ? myInfo.getFirmwareVersion() : "--");
             metricsChUtil.setText(String.format(Locale.US, "%.1f%%", myInfo.getChannelUtilization()));

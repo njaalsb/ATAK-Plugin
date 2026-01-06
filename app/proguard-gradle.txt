@@ -75,6 +75,37 @@
 # These classes use Parcelable
 -keep class com.geeksville.mesh.** { *; }
 
+# Meshtastic AIDL interface and model classes (required for service communication)
+# CRITICAL: These are Kotlin @Parcelize data classes - must keep everything for AIDL deserialization
+-keep class org.meshtastic.** { *; }
+-keep interface org.meshtastic.** { *; }
+
+# Keep ALL members of model classes (fields, constructors, methods)
+-keepclassmembers class org.meshtastic.core.model.** {
+    *;
+}
+
+# Prevent any obfuscation of model class names
+-keepnames class org.meshtastic.core.model.**
+
+# Keep Kotlin @Parcelize generated code
+-keep class org.meshtastic.core.model.**$Creator { *; }
+-keep class org.meshtastic.core.model.**$Companion { *; }
+
+# Keep Parcelable CREATOR for all classes
+-keepclassmembers class * implements android.os.Parcelable {
+    public static final ** CREATOR;
+    public void writeToParcel(android.os.Parcel, int);
+    <fields>;
+    <init>(...);
+}
+
+# Keep Kotlin Parcelize annotations and metadata
+-keep @kotlinx.parcelize.Parcelize class * { *; }
+-keepclassmembers @kotlinx.parcelize.Parcelize class * {
+    *;
+}
+
 -keep class com.google.** {*;}
 -keep class com.siemens.** {*;}
 -keep class com.sun.** {*;}

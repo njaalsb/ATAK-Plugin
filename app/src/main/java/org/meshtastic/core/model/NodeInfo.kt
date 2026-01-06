@@ -18,8 +18,8 @@
 package org.meshtastic.core.model
 
 import android.graphics.Color
+import android.os.Parcel
 import android.os.Parcelable
-import kotlinx.parcelize.Parcelize
 import org.meshtastic.core.model.util.anonymize
 import org.meshtastic.core.model.util.bearing
 import org.meshtastic.core.model.util.latLongToMeter
@@ -30,9 +30,9 @@ import org.meshtastic.proto.TelemetryProtos
 
 //
 // model objects that directly map to the corresponding protobufs
+// Using explicit Parcelable implementation for Android 13+ compatibility with ATAK plugin ClassLoader
 //
 
-@Parcelize
 data class MeshUser(
     val id: String,
     val longName: String,
@@ -52,6 +52,15 @@ data class MeshUser(
     /** Create our model object from a protobuf. */
     constructor(p: MeshProtos.User) : this(p.id, p.longName, p.shortName, p.hwModel, p.isLicensed, p.roleValue)
 
+    constructor(parcel: Parcel) : this(
+        parcel.readString() ?: "",
+        parcel.readString() ?: "",
+        parcel.readString() ?: "",
+        MeshProtos.HardwareModel.forNumber(parcel.readInt()) ?: MeshProtos.HardwareModel.UNSET,
+        parcel.readInt() == 1,
+        parcel.readInt(),
+    )
+
     /**
      * a string version of the hardware model, converted into pretty lowercase and changing _ to -, and p to dot or null
      * if unset
@@ -63,9 +72,24 @@ data class MeshUser(
             } else {
                 hwModel.name.replace('_', '-').replace('p', '.').lowercase()
             }
+
+    override fun writeToParcel(parcel: Parcel, flags: Int) {
+        parcel.writeString(id)
+        parcel.writeString(longName)
+        parcel.writeString(shortName)
+        parcel.writeInt(hwModel.number)
+        parcel.writeInt(if (isLicensed) 1 else 0)
+        parcel.writeInt(role)
+    }
+
+    override fun describeContents(): Int = 0
+
+    companion object CREATOR : Parcelable.Creator<MeshUser> {
+        override fun createFromParcel(parcel: Parcel): MeshUser = MeshUser(parcel)
+        override fun newArray(size: Int): Array<MeshUser?> = arrayOfNulls(size)
+    }
 }
 
-@Parcelize
 data class Position(
     val latitude: Double,
     val longitude: Double,
@@ -78,13 +102,16 @@ data class Position(
 ) : Parcelable {
 
     @Suppress("MagicNumber")
-    companion object {
+    companion object CREATOR : Parcelable.Creator<Position> {
         // / Convert to a double representation of degrees
         fun degD(i: Int) = i * 1e-7
 
         fun degI(d: Double) = (d * 1e7).toInt()
 
         fun currentTime() = (System.currentTimeMillis() / 1000).toInt()
+
+        override fun createFromParcel(parcel: Parcel): Position = Position(parcel)
+        override fun newArray(size: Int): Array<Position?> = arrayOfNulls(size)
     }
 
     /**
@@ -106,6 +133,17 @@ data class Position(
         position.precisionBits,
     )
 
+    constructor(parcel: Parcel) : this(
+        parcel.readDouble(),
+        parcel.readDouble(),
+        parcel.readInt(),
+        parcel.readInt(),
+        parcel.readInt(),
+        parcel.readInt(),
+        parcel.readInt(),
+        parcel.readInt(),
+    )
+
     // / @return distance in meters to some other node (or null if unknown)
     fun distance(o: Position) = latLongToMeter(latitude, longitude, o.latitude, o.longitude)
 
@@ -121,9 +159,21 @@ data class Position(
 
     override fun toString(): String =
         "Position(lat=${latitude.anonymize}, lon=${longitude.anonymize}, alt=${altitude.anonymize}, time=$time)"
+
+    override fun writeToParcel(parcel: Parcel, flags: Int) {
+        parcel.writeDouble(latitude)
+        parcel.writeDouble(longitude)
+        parcel.writeInt(altitude)
+        parcel.writeInt(time)
+        parcel.writeInt(satellitesInView)
+        parcel.writeInt(groundSpeed)
+        parcel.writeInt(groundTrack)
+        parcel.writeInt(precisionBits)
+    }
+
+    override fun describeContents(): Int = 0
 }
 
-@Parcelize
 data class DeviceMetrics(
     val time: Int = currentTime(), // default to current time in secs (NOT MILLISECONDS!)
     val batteryLevel: Int = 0,
@@ -132,9 +182,12 @@ data class DeviceMetrics(
     val airUtilTx: Float,
     val uptimeSeconds: Int,
 ) : Parcelable {
-    companion object {
+    companion object CREATOR : Parcelable.Creator<DeviceMetrics> {
         @Suppress("MagicNumber")
         fun currentTime() = (System.currentTimeMillis() / 1000).toInt()
+
+        override fun createFromParcel(parcel: Parcel): DeviceMetrics = DeviceMetrics(parcel)
+        override fun newArray(size: Int): Array<DeviceMetrics?> = arrayOfNulls(size)
     }
 
     /** Create our model object from a protobuf. */
@@ -142,9 +195,28 @@ data class DeviceMetrics(
         p: TelemetryProtos.DeviceMetrics,
         telemetryTime: Int = currentTime(),
     ) : this(telemetryTime, p.batteryLevel, p.voltage, p.channelUtilization, p.airUtilTx, p.uptimeSeconds)
+
+    constructor(parcel: Parcel) : this(
+        parcel.readInt(),
+        parcel.readInt(),
+        parcel.readFloat(),
+        parcel.readFloat(),
+        parcel.readFloat(),
+        parcel.readInt(),
+    )
+
+    override fun writeToParcel(parcel: Parcel, flags: Int) {
+        parcel.writeInt(time)
+        parcel.writeInt(batteryLevel)
+        parcel.writeFloat(voltage)
+        parcel.writeFloat(channelUtilization)
+        parcel.writeFloat(airUtilTx)
+        parcel.writeInt(uptimeSeconds)
+    }
+
+    override fun describeContents(): Int = 0
 }
 
-@Parcelize
 data class EnvironmentMetrics(
     val time: Int = currentTime(), // default to current time in secs (NOT MILLISECONDS!)
     val temperature: Float?,
@@ -160,7 +232,7 @@ data class EnvironmentMetrics(
     val uvLux: Float? = null,
 ) : Parcelable {
     @Suppress("MagicNumber")
-    companion object {
+    companion object CREATOR : Parcelable.Creator<EnvironmentMetrics> {
         fun currentTime() = (System.currentTimeMillis() / 1000).toInt()
 
         fun fromTelemetryProto(proto: TelemetryProtos.EnvironmentMetrics, time: Int): EnvironmentMetrics =
@@ -179,10 +251,72 @@ data class EnvironmentMetrics(
                 uvLux = proto.uvLux.takeIf { proto.hasUvLux() && !it.isNaN() },
                 time = time,
             )
+
+        override fun createFromParcel(parcel: Parcel): EnvironmentMetrics = EnvironmentMetrics(parcel)
+        override fun newArray(size: Int): Array<EnvironmentMetrics?> = arrayOfNulls(size)
+
+        // Helper to read nullable Float
+        private fun Parcel.readNullableFloat(): Float? {
+            return if (readInt() == 1) readFloat() else null
+        }
+
+        // Helper to read nullable Int
+        private fun Parcel.readNullableInt(): Int? {
+            return if (readInt() == 1) readInt() else null
+        }
     }
+
+    constructor(parcel: Parcel) : this(
+        parcel.readInt(),
+        if (parcel.readInt() == 1) parcel.readFloat() else null,
+        if (parcel.readInt() == 1) parcel.readFloat() else null,
+        if (parcel.readInt() == 1) parcel.readFloat() else null,
+        if (parcel.readInt() == 1) parcel.readInt() else null,
+        if (parcel.readInt() == 1) parcel.readFloat() else null,
+        if (parcel.readInt() == 1) parcel.readFloat() else null,
+        if (parcel.readInt() == 1) parcel.readFloat() else null,
+        if (parcel.readInt() == 1) parcel.readFloat() else null,
+        if (parcel.readInt() == 1) parcel.readInt() else null,
+        if (parcel.readInt() == 1) parcel.readFloat() else null,
+        if (parcel.readInt() == 1) parcel.readFloat() else null,
+    )
+
+    override fun writeToParcel(parcel: Parcel, flags: Int) {
+        parcel.writeInt(time)
+        writeNullableFloat(parcel, temperature)
+        writeNullableFloat(parcel, relativeHumidity)
+        writeNullableFloat(parcel, soilTemperature)
+        writeNullableInt(parcel, soilMoisture)
+        writeNullableFloat(parcel, barometricPressure)
+        writeNullableFloat(parcel, gasResistance)
+        writeNullableFloat(parcel, voltage)
+        writeNullableFloat(parcel, current)
+        writeNullableInt(parcel, iaq)
+        writeNullableFloat(parcel, lux)
+        writeNullableFloat(parcel, uvLux)
+    }
+
+    private fun writeNullableFloat(parcel: Parcel, value: Float?) {
+        if (value != null) {
+            parcel.writeInt(1)
+            parcel.writeFloat(value)
+        } else {
+            parcel.writeInt(0)
+        }
+    }
+
+    private fun writeNullableInt(parcel: Parcel, value: Int?) {
+        if (value != null) {
+            parcel.writeInt(1)
+            parcel.writeInt(value)
+        } else {
+            parcel.writeInt(0)
+        }
+    }
+
+    override fun describeContents(): Int = 0
 }
 
-@Parcelize
 data class NodeInfo(
     val num: Int, // This is immutable, and used as a key
     var user: MeshUser? = null,
@@ -257,5 +391,58 @@ data class NodeInfo(
                 "%.1f mi".format(dist / 1609.34)
             else -> null
         }
+    }
+
+    constructor(parcel: Parcel) : this(
+        parcel.readInt(),
+        if (parcel.readInt() == 1) MeshUser(parcel) else null,
+        if (parcel.readInt() == 1) Position(parcel) else null,
+        parcel.readFloat(),
+        parcel.readInt(),
+        parcel.readInt(),
+        if (parcel.readInt() == 1) DeviceMetrics(parcel) else null,
+        parcel.readInt(),
+        if (parcel.readInt() == 1) EnvironmentMetrics(parcel) else null,
+        parcel.readInt(),
+    )
+
+    override fun writeToParcel(parcel: Parcel, flags: Int) {
+        parcel.writeInt(num)
+        if (user != null) {
+            parcel.writeInt(1)
+            user!!.writeToParcel(parcel, flags)
+        } else {
+            parcel.writeInt(0)
+        }
+        if (position != null) {
+            parcel.writeInt(1)
+            position!!.writeToParcel(parcel, flags)
+        } else {
+            parcel.writeInt(0)
+        }
+        parcel.writeFloat(snr)
+        parcel.writeInt(rssi)
+        parcel.writeInt(lastHeard)
+        if (deviceMetrics != null) {
+            parcel.writeInt(1)
+            deviceMetrics!!.writeToParcel(parcel, flags)
+        } else {
+            parcel.writeInt(0)
+        }
+        parcel.writeInt(channel)
+        if (environmentMetrics != null) {
+            parcel.writeInt(1)
+            environmentMetrics!!.writeToParcel(parcel, flags)
+        } else {
+            parcel.writeInt(0)
+        }
+        parcel.writeInt(hopsAway)
+    }
+
+    override fun describeContents(): Int = 0
+
+    companion object CREATOR : Parcelable.Creator<NodeInfo> {
+        override fun createFromParcel(parcel: Parcel): NodeInfo = NodeInfo(parcel)
+        override fun newArray(size: Int): Array<NodeInfo?> = arrayOfNulls(size)
     }
 }

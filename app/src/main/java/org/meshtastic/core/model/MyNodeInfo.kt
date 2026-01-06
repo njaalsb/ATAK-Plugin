@@ -17,11 +17,11 @@
 
 package org.meshtastic.core.model
 
+import android.os.Parcel
 import android.os.Parcelable
-import kotlinx.parcelize.Parcelize
 
 // MyNodeInfo sent via special protobuf from radio
-@Parcelize
+// Using explicit Parcelable implementation for Android 13+ compatibility with ATAK plugin ClassLoader
 data class MyNodeInfo(
     val myNodeNum: Int,
     val hasGPS: Boolean,
@@ -41,4 +41,45 @@ data class MyNodeInfo(
     /** A human readable description of the software/hardware version */
     val firmwareString: String
         get() = "$model $firmwareVersion"
+
+    constructor(parcel: Parcel) : this(
+        parcel.readInt(),
+        parcel.readInt() == 1,
+        parcel.readString(),
+        parcel.readString(),
+        parcel.readInt() == 1,
+        parcel.readInt() == 1,
+        parcel.readLong(),
+        parcel.readInt(),
+        parcel.readInt(),
+        parcel.readInt(),
+        parcel.readInt() == 1,
+        parcel.readFloat(),
+        parcel.readFloat(),
+        parcel.readString(),
+    )
+
+    override fun writeToParcel(parcel: Parcel, flags: Int) {
+        parcel.writeInt(myNodeNum)
+        parcel.writeInt(if (hasGPS) 1 else 0)
+        parcel.writeString(model)
+        parcel.writeString(firmwareVersion)
+        parcel.writeInt(if (couldUpdate) 1 else 0)
+        parcel.writeInt(if (shouldUpdate) 1 else 0)
+        parcel.writeLong(currentPacketId)
+        parcel.writeInt(messageTimeoutMsec)
+        parcel.writeInt(minAppVersion)
+        parcel.writeInt(maxChannels)
+        parcel.writeInt(if (hasWifi) 1 else 0)
+        parcel.writeFloat(channelUtilization)
+        parcel.writeFloat(airUtilTx)
+        parcel.writeString(deviceId)
+    }
+
+    override fun describeContents(): Int = 0
+
+    companion object CREATOR : Parcelable.Creator<MyNodeInfo> {
+        override fun createFromParcel(parcel: Parcel): MyNodeInfo = MyNodeInfo(parcel)
+        override fun newArray(size: Int): Array<MyNodeInfo?> = arrayOfNulls(size)
+    }
 }
