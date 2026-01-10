@@ -236,3 +236,6 @@
 -dontwarn org.apache.xml.resolver.readers.CatalogReader
 -dontwarn org.apache.xml.resolver.readers.SAXCatalogReader
 
+# OkHttp classes (provided by ATAK at runtime, excluded from build)
+-dontwarn okhttp3.**
+
