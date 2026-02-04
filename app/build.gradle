@@ -9,7 +9,7 @@
 buildscript {
 
 
-    ext.PLUGIN_VERSION = "1.1.38"
+    ext.PLUGIN_VERSION = "1.1.39"
     ext.ATAK_VERSION = "5.6.0"
 
     def takdevVersion = '3.+'
@@ -316,7 +316,7 @@ dependencies {
     implementation 'com.alphacephei:vosk-android:0.3.47@aar'
     implementation project(':models')
 
-    def meshtasticVersion = "main-SNAPSHOT"
+    def meshtasticVersion = "9dbc8b7fbf"
 
     // The core AIDL interface (IMeshService)
     implementation "com.github.meshtastic.Meshtastic-Android:core-api:$meshtasticVersion"
@@ -326,6 +326,7 @@ dependencies {
 
     // The underlying Protobuf definitions
     implementation "com.github.meshtastic.Meshtastic-Android:core-proto:$meshtasticVersion"
+
 
     // Osmdroid & Maps
     def osmdroid_version = '6.1.14'
