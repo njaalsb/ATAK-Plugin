@@ -30,8 +30,10 @@ import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.AudioTrack;
 
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Parcelable;
 import android.os.RemoteException;
 import android.preference.PreferenceManager;
 import android.speech.tts.TextToSpeech;
@@ -121,6 +123,19 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
             new java.util.concurrent.ConcurrentHashMap<>();
     private static final java.util.concurrent.ConcurrentHashMap<String, String> nodeIdToDeviceUid =
             new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * Type-safe getParcelableExtra that avoids the Android 13 (API 33) bug b/232589966.
+     * Uses the new type-safe API only on API 34+, falls back to deprecated API on 33 and below.
+     */
+    @SuppressWarnings("deprecation")
+    private static <T extends Parcelable> T getParcelableExtraSafe(Intent intent, String key, Class<T> clazz) {
+        if (Build.VERSION.SDK_INT > 33) {
+            return intent.getParcelableExtra(key, clazz);
+        } else {
+            return intent.getParcelableExtra(key);
+        }
+    }
 
     public MeshtasticReceiver(MeshtasticExternalGPS meshtasticExternalGPS, FountainChunkManager fountainChunkManager) {
         this.meshtasticExternalGPS = meshtasticExternalGPS;
@@ -316,7 +331,7 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
             }
             case Constants.ACTION_MESSAGE_STATUS:
                 int id = intent.getIntExtra(Constants.EXTRA_PACKET_ID, 0);
-                MessageStatus status = intent.getParcelableExtra(Constants.EXTRA_STATUS);
+                MessageStatus status = getParcelableExtraSafe(intent, Constants.EXTRA_STATUS, MessageStatus.class);
                 Log.d(TAG, "Message Status ID: " + id + " Status: " + status);
                 break;
             case Constants.ACTION_RECEIVED_ATAK_FORWARDER:
@@ -336,7 +351,7 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
             case Constants.ACTION_ALERT_APP:
             case Constants.ACTION_TEXT_MESSAGE_APP:
                 Log.d(TAG, "Got a meshtastic text message");
-                DataPacket payload = intent.getParcelableExtra(Constants.EXTRA_PAYLOAD);
+                DataPacket payload = getParcelableExtraSafe(intent, Constants.EXTRA_PAYLOAD, DataPacket.class);
                 if (payload == null) return;
 
                 // Apply channel filter if enabled
@@ -370,9 +385,15 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
                 }
 
                 if (payload.getTo().equals("^all")) {
-                    Log.d(TAG, "Sending CoT for Text Message");
-                    // Look up sender's ATAK info from lookup table (populated from PLI/GeoChat)
+                    // Skip TEXT_MESSAGE_APP from known ATAK users to avoid duplicates
+                    // (they already send via ATAK_PLUGIN port 72)
                     String senderNodeId = payload.getFrom();
+                    if (nodeIdToDeviceUid.containsKey(senderNodeId)) {
+                        Log.d(TAG, "Ignoring TEXT_MESSAGE_APP from known ATAK user: " + senderNodeId);
+                        return;
+                    }
+
+                    Log.d(TAG, "Sending CoT for Text Message");
                     String senderCallsign = getNodeLongName(senderNodeId);
                     // Use ATAK device UID if known, otherwise fall back to node ID
                     String senderUid = nodeIdToDeviceUid.getOrDefault(senderNodeId, senderNodeId);
@@ -507,7 +528,7 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
             case Constants.ACTION_NODE_CHANGE:
                 NodeInfo ni = null;
                 try {
-                    ni = intent.getParcelableExtra("com.geeksville.mesh.NodeInfo");
+                    ni = getParcelableExtraSafe(intent, "com.geeksville.mesh.NodeInfo", NodeInfo.class);
                     Log.d(TAG, "NodeInfo: " + ni);
                 } catch (Exception e) {
                     e.printStackTrace();
@@ -812,7 +833,7 @@ public class MeshtasticReceiver extends BroadcastReceiver implements CotServiceR
     }
 
     protected void receive(Intent intent) {
-        DataPacket payload = intent.getParcelableExtra(Constants.EXTRA_PAYLOAD);
+        DataPacket payload = getParcelableExtraSafe(intent, Constants.EXTRA_PAYLOAD, DataPacket.class);
         if (payload == null) return;
         int dataType = payload.getDataType();
         Log.v(TAG, "handleReceive(), dataType: " + dataType + " size: " + payload.getBytes().size());

@@ -515,6 +515,35 @@ public class MeshtasticMapComponent extends DropDownMapComponent
         );
 
         meshServiceManager.sendToMesh(dp);
+
+        // Also send as TEXT_MESSAGE_APP so non-ATAK Meshtastic users can see the message
+        if (data.message != null && !data.message.isEmpty()) {
+            Log.d(TAG, "Also sending All Chat as TEXT_MESSAGE_APP for Meshtastic users");
+            byte[] messageBytes = data.message.getBytes(StandardCharsets.UTF_8);
+            DataPacket textDp = new DataPacket(
+                    DataPacket.ID_BROADCAST,
+                    ByteString.of(messageBytes, 0, messageBytes.length),
+                    PortNum.TEXT_MESSAGE_APP.getValue(),
+                    DataPacket.ID_LOCAL,
+                    System.currentTimeMillis(),
+                    0,
+                    MessageStatus.UNKNOWN,
+                    hopLimit,
+                    channel,
+                    MeshtasticReceiver.getWantsAck(),
+                    0,  // hopStart
+                    0f, // snr
+                    0,  // rssi
+                    null, // replyId
+                    null, // relayNode
+                    0,    // relays
+                    false, // viaMqtt
+                    0,    // emoji
+                    null, // sfppHash
+                    0     // transportMechanism
+            );
+            meshServiceManager.sendToMesh(textDp);
+        }
     }
 
     private void handleDirectMessage(CotEventProcessor.ParsedCotData data, int hopLimit, int channel) {
