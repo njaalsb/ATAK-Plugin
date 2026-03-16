@@ -137,13 +137,13 @@ android {
 
     signingConfigs {
         debug {
-            storeFile file("${buildDir}/android_keystore")
+            storeFile file("key.jks")
             storePassword "tnttnt"
             keyAlias "wintec_mapping"
             keyPassword "tnttnt"
         }
         release {
-            storeFile file("${buildDir}/android_keystore")
+            storeFile file("key.jks")
             storePassword "tnttnt"
             keyAlias "wintec_mapping"
             keyPassword "tnttnt"
