@@ -10,7 +10,6 @@ import com.atakmap.android.widgets.MarkerIconWidget;
 import com.atakmap.coremap.log.Log;
 import com.atakmap.android.meshtastic.plugin.R;
 
-
 public class MeshtasticWidget extends MarkerIconWidget {
     private final static int ICON_WIDTH = 32;
     private final static int ICON_HEIGHT = 32;

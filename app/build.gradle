@@ -10,7 +10,7 @@ buildscript {
 
 
     ext.PLUGIN_VERSION = "1.1.41"
-    ext.ATAK_VERSION = "5.6.0"
+    ext.ATAK_VERSION = "5.5.1.8"
 
     def takdevVersion = "3.+"
 
@@ -68,15 +68,10 @@ buildscript {
     }
 }
 
-plugins {
-    id("com.android.application")
-    id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.parcelize")
-}
-apply {
-    plugin("atak-takdev-plugin")
-    //from("../gradle/typst.gradle")
-}
+apply plugin: 'com.android.application'
+apply plugin: 'org.jetbrains.kotlin.android'
+apply plugin: 'org.jetbrains.kotlin.plugin.parcelize'
+apply plugin: 'atak-takdev-plugin'
 
 allprojects {
     repositories {
@@ -258,6 +253,11 @@ android {
     }
 }
 
+takdev {
+    sdkPath = rootProject.file(
+            getValueFromPropertiesFile(rootProject.file('local.properties'), 'atak.sdk')
+    )
+}
 afterEvaluate {
     project.file('proguard-gradle-repackage.txt').text = "-repackageclasses atakplugin.${rootProject.getName()}"
 
@@ -294,6 +294,13 @@ def getCommandFlavor() {
 
 dependencies {
     implementation fileTree(dir: 'libs', include: '*.jar')
+
+    // Libraries provided by ATAK at runtime, but needed for compilation
+    compileOnly "com.squareup.okio:okio:3.2.0"
+    compileOnly "androidx.core:core:1.12.0"
+    compileOnly "androidx.fragment:fragment:1.6.2"
+    compileOnly "androidx.lifecycle:lifecycle-runtime:2.6.2"
+    compileOnly "androidx.annotation:annotation:1.7.1"
 
     implementation project(":libcodec2-android")
 
