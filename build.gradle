@@ -1,3 +1,25 @@
+/*
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath files("C:/ATAK-CIV-5.5.1.8-SDK/atak-gradle-takdev.jar")
+    }
+}*/
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath files('C:/ATAK-CIV-5.5.1.8-SDK/atak-gradle-takdev.jar')
+    }
+}
+
 plugins {
     id("com.android.application") version "8.13.0" apply false
     id("com.android.library") version "8.13.0" apply false
@@ -13,3 +35,6 @@ ext {
 task clean(type: Delete) {
     delete rootProject.buildDir
 }
+
+// Debug print:
+println("TAKDEV JAR EXISTS = " + file("C:/ATAK-CIV-5.5.1.8-SDK/atak-gradle-takdev.jar").exists())

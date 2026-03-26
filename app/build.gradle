@@ -6,11 +6,37 @@
 //
 ////////////////////////////////////////////////////////////////////////////////
 
+def getVersionCode() {
+    try {
+        def stdout = new ByteArrayOutputStream()
+        exec {
+            commandLine 'git', 'rev-list', '--count', 'HEAD'
+            standardOutput = stdout
+        }
+        return Integer.parseInt(stdout.toString().trim())
+    } catch (Exception e) {
+        return 1
+    }
+}
+
+def getVersionName() {
+    try {
+        def stdout = new ByteArrayOutputStream()
+        exec {
+            commandLine 'git', 'describe', '--tags', '--dirty'
+            standardOutput = stdout
+        }
+        return stdout.toString().trim()
+    } catch (Exception e) {
+        return "1.0"
+    }
+}
+
 buildscript {
 
 
-    ext.PLUGIN_VERSION = "1.1.41"
-    ext.ATAK_VERSION = "5.5.1.8"
+    ext.PLUGIN_VERSION = "1.1.40"
+    ext.ATAK_VERSION = "5.6.0"
 
     def takdevVersion = "3.+"
 
@@ -48,18 +74,10 @@ buildscript {
         google()
         mavenCentral()
         mavenLocal()
-        maven {
-            url "https://jitpack.io"
-        }
-        maven {
-            url = takrepoUrl
-            credentials {
-                username = takrepoUser
-                password = takrepoPassword
-            }
-        }
+        maven { url "https://jitpack.io" }
     }
     dependencies {
+
         if(isDevKitEnabled()) {
             classpath "com.atakmap.gradle:atak-gradle-takdev:${takdevVersion}"
         } else {
@@ -68,10 +86,42 @@ buildscript {
     }
 }
 
-apply plugin: 'com.android.application'
-apply plugin: 'org.jetbrains.kotlin.android'
-apply plugin: 'org.jetbrains.kotlin.plugin.parcelize'
-apply plugin: 'atak-takdev-plugin'
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.parcelize")
+}
+
+
+// Linja som henter plugin
+
+apply {
+    plugin("atak-takdev-plugin")
+    //from("../gradle/typst.gradle")
+}
+
+// Link the SDK path from local.properties
+
+// Define this outside of buildscript so it is visible to the whole file
+/*
+def getLocalProperty(name, defValue = null) {
+    def propFile = project.rootProject.file('local.properties')
+    if (propFile.exists()) {
+        def props = new Properties()
+        propFile.withInputStream { props.load(it) }
+        return props.getProperty(name) ?: defValue
+    }
+    return defValue
+}
+
+takdev {
+    // This now uses the helper function we just defined above
+    def sdkPathProp = getLocalProperty('atak.sdk')
+
+    if (sdkPathProp != null) {
+        sdkPath = file(sdkPathProp)
+    }
+}*/
 
 allprojects {
     repositories {
@@ -87,11 +137,14 @@ allprojects {
 // ISO tricode (xyz is an example and not a real country code).   The ISO tricode can be found here
 // Please see the A-3 in https://en.wikipedia.org/wiki/List_of_ISO_3166_country_codes
 
-
 def supportedFlavors =
-[
+        [
                 [ name : 'civ', default: true ],
-]
+        ]
+
+// Compute these BEFORE the android block
+def versionNameValue = getVersionName()
+def versionCodeValue = getVersionCode()
 
 android {
     compileSdk 36
@@ -131,14 +184,23 @@ android {
     }
 
     signingConfigs {
+        /*
         debug {
-            storeFile file("key.jks")
+            storeFile file("${buildDir}/android_keystore")
             storePassword "tnttnt"
             keyAlias "wintec_mapping"
             keyPassword "tnttnt"
+        }*/
+
+        debug {
+            storeFile file("${System.properties['user.home']}/.android/debug.keystore")
+            storePassword "android"
+            keyAlias "androiddebugkey"
+            keyPassword "android"
         }
+
         release {
-            storeFile file("key.jks")
+            storeFile file("${buildDir}/android_keystore")
             storePassword "tnttnt"
             keyAlias "wintec_mapping"
             keyPassword "tnttnt"
@@ -166,6 +228,8 @@ android {
             }
         }
     }
+
+
 */
     flavorDimensions "application"
 
@@ -211,14 +275,14 @@ android {
     sourceSets {
         main {
 
-	    // aidl is not being compiled when upgrading AGP 8+
+            // aidl is not being compiled when upgrading AGP 8+
             //aidl.srcDirs = ['src/main/aidl']
 
             // It is strongly encouraged that plugin developers do not modify the archivesBaseName, version code logic and version
             // name logic to provide for consistency within the community.
-            setProperty("archivesBaseName", "ATAK-Plugin-" + rootProject.name + "-" + PLUGIN_VERSION + "-" + getVersionName() + "-" + ATAK_VERSION)
-            defaultConfig.versionCode = getVersionCode()
-            defaultConfig.versionName = PLUGIN_VERSION + " (" + getVersionName() + ") - [" + ATAK_VERSION + "]"
+            setProperty("archivesBaseName", "ATAK-Plugin-" + rootProject.name + "-" + PLUGIN_VERSION + "-" + versionNameValue + "-" + ATAK_VERSION)
+            defaultConfig.versionCode = versionCodeValue
+            defaultConfig.versionName = PLUGIN_VERSION + " (" + versionNameValue + ") - [" + ATAK_VERSION + "]"
         }
 
         // Move the build types to build-types/<type>
@@ -253,11 +317,6 @@ android {
     }
 }
 
-takdev {
-    sdkPath = rootProject.file(
-            getValueFromPropertiesFile(rootProject.file('local.properties'), 'atak.sdk')
-    )
-}
 afterEvaluate {
     project.file('proguard-gradle-repackage.txt').text = "-repackageclasses atakplugin.${rootProject.getName()}"
 
@@ -295,20 +354,13 @@ def getCommandFlavor() {
 dependencies {
     implementation fileTree(dir: 'libs', include: '*.jar')
 
-    // Libraries provided by ATAK at runtime, but needed for compilation
-    compileOnly "com.squareup.okio:okio:3.2.0"
-    compileOnly "androidx.core:core:1.12.0"
-    compileOnly "androidx.fragment:fragment:1.6.2"
-    compileOnly "androidx.lifecycle:lifecycle-runtime:2.6.2"
-    compileOnly "androidx.annotation:annotation:1.7.1"
-
     implementation project(":libcodec2-android")
 
     // https://mvnrepository.com/artifact/com.siemens.ct.exi/exificient
     implementation 'com.siemens.ct.exi:exificient:1.0.7'
 
-	implementation "org.jetbrains.kotlinx:kotlinx-serialization-core:1.9.0"
-	implementation "org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0"
+    implementation "org.jetbrains.kotlinx:kotlinx-serialization-core:1.9.0"
+    implementation "org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0"
 
     implementation 'com.google.ar:core:1.43.0'
 
@@ -340,7 +392,19 @@ dependencies {
     testImplementation 'org.assertj:assertj-core:3.27.3'
     testImplementation 'org.mockito:mockito-core:5.16.1'
     testImplementation 'org.mockito:mockito-junit-jupiter:5.16.1'
+
+    implementation fileTree(dir: 'libs', include: '*.jar')
+
+    // These are required for compilation but provided by ATAK at runtime
+    compileOnly "com.squareup.okio:okio:3.2.0"
+    compileOnly "androidx.core:core:1.12.0"
+    compileOnly "androidx.fragment:fragment:1.6.2"
+    compileOnly "androidx.lifecycle:lifecycle-runtime:2.6.2"
+    compileOnly "androidx.annotation:annotation:1.7.1"
+    compileOnly files('C:/ATAK-CIV-5.5.1.8-SDK/main.jar')
+    // ... your other implementation lines ...
 }
+
 
 configurations.all {
     resolutionStrategy.eachDependency { details ->
