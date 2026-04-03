@@ -1,5 +1,9 @@
 package com.atakmap.android.meshtastic;
 
+
+// Må sannsynlgivis endre noe her
+
+
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
