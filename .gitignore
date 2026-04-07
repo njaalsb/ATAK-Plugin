@@ -35,3 +35,5 @@ Thumbs.db
 .takdev/
 *.keystore
 app/src/main/protobufs
+
+CLAUDE.md
